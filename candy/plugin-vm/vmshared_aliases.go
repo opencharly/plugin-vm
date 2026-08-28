@@ -24,6 +24,7 @@ type (
 	LibvirtFeatures          = vmshared.LibvirtFeatures
 	LibvirtFilesystem        = vmshared.LibvirtFilesystem
 	LibvirtGraphics          = vmshared.LibvirtGraphics
+	LibvirtGraphicsGL        = vmshared.LibvirtGraphicsGL
 	LibvirtGraphicsListen    = vmshared.LibvirtGraphicsListen
 	LibvirtGraphicsListeners = vmshared.LibvirtGraphicsListeners
 	LibvirtHostdev           = vmshared.LibvirtHostdev
@@ -49,6 +50,8 @@ type (
 	LibvirtURI               = vmshared.LibvirtURI
 	LibvirtVendorID          = vmshared.LibvirtVendorID
 	LibvirtVideo             = vmshared.LibvirtVideo
+	LibvirtVideoDriver       = vmshared.LibvirtVideoDriver
+	LibvirtVideoResolution   = vmshared.LibvirtVideoResolution
 	LibvirtVsock             = vmshared.LibvirtVsock
 	Op                       = vmshared.Op
 	QemuRuntimePaths         = vmshared.QemuRuntimePaths

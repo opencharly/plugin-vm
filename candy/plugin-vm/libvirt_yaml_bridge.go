@@ -109,8 +109,15 @@ func BuildLibvirtDomainXML(spec *VmSpec, rt VmRuntimeParams) (*libvirtxml.Domain
 	d.Features = buildDomainFeatures(lv)
 	d.CPU = buildDomainCPU(spec, rt)
 	d.Clock = buildDomainClock(lv)
+	// The GPU rules run BEFORE the devices are built: every one of them guards a field
+	// that would otherwise render to nothing, so failing here — with a message naming the
+	// device index and the reason — is the whole point (libvirt_gpu_config.go).
+	if err := validateLibvirtGpuConfig(lv); err != nil {
+		return nil, err
+	}
 	d.Devices = buildDomainDevices(spec, rt)
-	ensureVirtiofsSharedMemory(d)
+	d.QEMUOverride = buildQemuOverride(lv)
+	ensureSharedMemoryBacking(d)
 	ensureVirtiofsIdmap(d)
 
 	if lv != nil && lv.SecLabel != nil {
@@ -368,25 +375,42 @@ func buildDomainClock(lv *LibvirtDomain) *libvirtxml.DomainClock {
 
 // ---------------- MemoryBacking / MemTune / NUMATune / CPUTune ----------------
 
-// ensureVirtiofsSharedMemory makes any virtiofs share startable. virtiofs
-// shares the guest's RAM with the virtiofsd process, which requires
-// <memoryBacking><source type='memfd'/><access mode='shared'/></memoryBacking>;
-// without it libvirt refuses to start the domain with a cryptic error. We
-// auto-pair it for any virtiofs filesystem so authors never have to remember
-// the coupling. An explicitly-declared backing (e.g. hugepages) is honored —
-// only the missing source/access bits are filled in.
-func ensureVirtiofsSharedMemory(d *libvirtxml.Domain) {
+// ensureSharedMemoryBacking makes any device that shares the guest's RAM startable, by
+// auto-pairing <memoryBacking><source type='memfd'/><access mode='shared'/>.
+//
+// TWO devices need it, and libvirt refuses to start the domain with a cryptic error when
+// either is present without it:
+//
+//   - a virtiofs share, which maps guest RAM into the virtiofsd process;
+//   - a virtio-gpu with blob=on, whose whole point is that the guest maps host memory
+//     directly instead of copying through the device.
+//
+// They are one predicate rather than two near-identical functions (the coupling is
+// "something shares guest memory", not "virtiofs"). An explicitly-declared backing (e.g.
+// hugepages) is honored — only the missing source/access bits are filled in. Auto-pairing
+// means an author enabling blob never has to discover the requirement from a failed start.
+func ensureSharedMemoryBacking(d *libvirtxml.Domain) {
 	if d == nil || d.Devices == nil {
 		return
 	}
-	hasVirtiofs := false
+	shared := false
 	for _, fs := range d.Devices.Filesystems {
 		if fs.Driver != nil && fs.Driver.Type == "virtiofs" {
-			hasVirtiofs = true
+			shared = true
 			break
 		}
 	}
-	if !hasVirtiofs {
+	if !shared {
+		for _, v := range d.Devices.Videos {
+			// blob= is virOnOff in libvirt's RNG (unlike primary=/accel3d= beside it,
+			// which are virYesNo), so "on" is its only truthy spelling.
+			if v.Model.Blob == "on" {
+				shared = true
+				break
+			}
+		}
+	}
+	if !shared {
 		return
 	}
 	if d.MemoryBacking == nil {
@@ -1256,8 +1280,11 @@ func mapGraphics(g LibvirtGraphics) libvirtxml.DomainGraphic {
 		if len(listeners) > 0 {
 			spice.Listeners = listeners
 		}
-		if g.GL != "" {
-			spice.GL = &libvirtxml.DomainGraphicSpiceGL{Enable: g.GL}
+		if g.GL != nil {
+			spice.GL = &libvirtxml.DomainGraphicSpiceGL{
+				Enable:     yesNoOrOmit(g.GL.Enable),
+				RenderNode: g.GL.RenderNode,
+			}
 		}
 		out.Spice = spice
 	case "rdp":
@@ -1268,7 +1295,26 @@ func mapGraphics(g LibvirtGraphics) libvirtxml.DomainGraphic {
 	case "sdl":
 		out.SDL = &libvirtxml.DomainGraphicSDL{}
 	case "egl-headless":
-		out.EGLHeadless = &libvirtxml.DomainGraphicEGLHeadless{}
+		egl := &libvirtxml.DomainGraphicEGLHeadless{}
+		// egl-headless' <gl> carries ONLY rendernode — libvirt defines no enable=
+		// attribute for it. An authored enable is rejected by validateLibvirtGpuConfig
+		// rather than dropped here.
+		if g.GL != nil && g.GL.RenderNode != "" {
+			egl.GL = &libvirtxml.DomainGraphicEGLHeadlessGL{RenderNode: g.GL.RenderNode}
+		}
+		out.EGLHeadless = egl
+	case "dbus":
+		dbus := &libvirtxml.DomainGraphicDBus{
+			Address: g.Address,
+			P2P:     yesNoOrOmit(g.P2P),
+		}
+		if g.GL != nil {
+			dbus.GL = &libvirtxml.DomainGraphicDBusGL{
+				Enable:     yesNoOrOmit(g.GL.Enable),
+				RenderNode: g.GL.RenderNode,
+			}
+		}
+		out.DBus = dbus
 	}
 	return out
 }
@@ -1301,22 +1347,71 @@ func buildGraphicsListeners(ll LibvirtGraphicsListeners) []libvirtxml.DomainGrap
 	return out
 }
 
-// mapVideo handles divergence #1 (accel3d scalar bool → nested <acceleration accel3d="yes|no"/>).
+// mapVideo handles divergence #1 (accel3d and friends are scalar bools here, nested
+// <acceleration accel3d="yes|no"/> attributes in libvirt) and renders the whole
+// DomainVideoModel / DomainVideoAccel / DomainVideoDriver surface.
+//
+// Every field is emitted ONLY when the author set it, so a video block written before
+// the GPU-configuration cutover renders byte-identically to what it rendered then.
 func mapVideo(v LibvirtVideo) libvirtxml.DomainVideo {
 	out := libvirtxml.DomainVideo{
 		Model: libvirtxml.DomainVideoModel{
-			Type:    v.Model,
-			VRam:    uint(v.VRAM),
-			Heads:   uint(v.Heads),
+			Type:   v.Model,
+			Device: v.Device,
+			Ram:    uint(v.Ram),
+			VRam:   uint(v.VRAM),
+			VRam64: uint(v.VRAM64),
+			VGAMem: uint(v.VGAMem),
+			Heads:  uint(v.Heads),
+			// blob= and edid= are virOnOff in libvirt's RNG, NOT virYesNo like the
+			// primary=/accel3d= attributes beside them. Rendering "yes" here produced
+			// XML libvirt rejects at define time; caught by validating the rendered
+			// domain against /usr/share/libvirt/schemas/domain.rng.
+			Blob:    boolPtrToOnOff(v.Blob),
+			EDID:    boolPtrToOnOff(v.EDID),
 			Primary: boolPtrToYesNo(v.Primary),
 		},
 	}
-	if v.Accel3D != nil {
+	if v.Accel3D != nil || v.Accel2D != nil || v.RenderNode != "" {
 		out.Model.Accel = &libvirtxml.DomainVideoAccel{
-			Accel3D: boolPtrToYesNo(v.Accel3D),
+			Accel3D:    boolPtrToYesNo(v.Accel3D),
+			Accel2D:    yesNoOrOmit(v.Accel2D),
+			RenderNode: v.RenderNode,
 		}
 	}
+	if r := v.Resolution; r != nil {
+		out.Model.Resolution = &libvirtxml.DomainVideoResolution{X: uint(r.X), Y: uint(r.Y)}
+	}
+	if dr := v.Driver; dr != nil {
+		out.Driver = &libvirtxml.DomainVideoDriver{
+			Name:      dr.Name,
+			VGAConf:   dr.VGAConf,
+			IOMMU:     boolPtrToOnOff(dr.IOMMU),
+			ATS:       boolPtrToOnOff(dr.ATS),
+			Packed:    boolPtrToOnOff(dr.Packed),
+			PagePerVQ: boolPtrToOnOff(dr.PagePerVQ),
+		}
+	}
+	// The user alias exists solely so libvirt.qemu_override can target this device;
+	// libvirt refuses an override against its own auto-assigned video0.
+	if v.Alias != "" {
+		out.Alias = &libvirtxml.DomainAlias{Name: v.Alias}
+	}
 	return out
+}
+
+// boolPtrToOnOff renders a tri-state bool as libvirt's on/off spelling. The virtio
+// <driver> toggles (iommu/ats/packed/page_per_vq) use on|off where the video model's
+// own attributes use yes|no, so the two spellings are separate helpers rather than one
+// with a flag — libvirt rejects the wrong spelling.
+func boolPtrToOnOff(b *bool) string {
+	if b == nil {
+		return ""
+	}
+	if *b {
+		return "on"
+	}
+	return "off"
 }
 
 func mapAudio(a LibvirtAudio) libvirtxml.DomainAudio {
