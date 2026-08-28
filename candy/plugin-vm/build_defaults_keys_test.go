@@ -26,7 +26,10 @@ import (
 var embeddedTopLevelKey = regexp.MustCompile(`(?m)^([a-z_][a-z0-9_-]*):$`)
 
 func TestEmbeddedDefaultsCarryOnlyTheKeysTheResolverReads(t *testing.T) {
-	want := map[string]bool{"ovmf_paths": true, "ovmf_distro_aliases": true}
+	// ovmf_paths is the ONLY key with a reader now: the distro -> family half moved to
+	// spec.DistroOvmfFamilies (generated from the distro vocabulary), so a reappearing
+	// ovmf_distro_aliases: here would be exactly the unread-key regrowth this guards.
+	want := map[string]bool{"ovmf_paths": true}
 
 	var got []string
 	for _, m := range embeddedTopLevelKey.FindAllStringSubmatch(string(embeddedCharlyDefaults), -1) {
@@ -38,7 +41,7 @@ func TestEmbeddedDefaultsCarryOnlyTheKeysTheResolverReads(t *testing.T) {
 	for _, k := range got {
 		if !want[k] {
 			t.Errorf("build_defaults.yml carries top-level key %q, which NOTHING reads.\n"+
-				"Its only consumer decodes ovmf_paths and ovmf_distro_aliases (sdk/vmshared/ovmf_paths.go).\n"+
+				"Its only consumer decodes ovmf_paths (sdk/vmshared/ovmf_paths.go).\n"+
 				"Do not mirror charly/charly.yml here: a key added for symmetry changes no behaviour and\n"+
 				"creates a false sync obligation. Add it only alongside code that actually decodes it.", k)
 		}
@@ -59,16 +62,12 @@ func TestEmbeddedDefaultsStillDecodeForTheResolver(t *testing.T) {
 			Secure    []map[string]string `yaml:"secure"`
 			Nonsecure []map[string]string `yaml:"nonsecure"`
 		} `yaml:"ovmf_paths"`
-		OvmfDistroAliases map[string]string `yaml:"ovmf_distro_aliases"`
 	}
 	if err := yaml.Unmarshal(embeddedCharlyDefaults, &doc); err != nil {
 		t.Fatalf("embedded build_defaults.yml does not parse: %v", err)
 	}
 	if len(doc.OvmfPaths) == 0 {
 		t.Error("ovmf_paths decoded empty — parseEmbeddedOvmfPaths panics on this")
-	}
-	if len(doc.OvmfDistroAliases) == 0 {
-		t.Error("ovmf_distro_aliases decoded empty — parseEmbeddedOvmfDistroAliases panics on this")
 	}
 	for fam, fp := range doc.OvmfPaths {
 		if len(fp.Secure) == 0 && len(fp.Nonsecure) == 0 {
