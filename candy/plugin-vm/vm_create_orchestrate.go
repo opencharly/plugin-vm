@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/opencharly/sdk/kit"
 )
 
 // runVmSpecCreate is the VmCreateCmd.Run branch for kind:vm entities.
@@ -116,6 +118,22 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		}
 		fmt.Fprintf(os.Stderr, "Regenerated cloud-init seed ISO from vm.yml\n")
 	}
+	// For iso sources, resolve the installer image the domain boots as its SECOND cdrom.
+	//
+	// Re-resolved through FetchArtifact rather than carried in state: it is content-addressed
+	// by URL, so on the normal path this is a stat plus a sidecar read against a cache the
+	// build already populated. Re-resolving also means a create AFTER the cache was evicted
+	// re-downloads and re-verifies rather than pointing the domain at a path that no longer
+	// exists — which would present as a guest that boots to a blank disk and hangs.
+	installerISOAbs := ""
+	if spec.Source.Kind == "iso" {
+		fetched, ferr := kit.FetchArtifact(spec.Source, ".iso")
+		if ferr != nil {
+			return fmt.Errorf("resolving the installer iso for %s: %w", entity, ferr)
+		}
+		installerISOAbs, _ = filepath.Abs(fetched.Path)
+	}
+
 	pubKey, err := resolveSSHPubKeyForSpec(spec, vmStateDir)
 	if err != nil {
 		return err
@@ -187,6 +205,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		Name:              vmDomainName,
 		QCOW2Path:         qcow2Abs,
 		SeedISOPath:       seedISOAbs,
+		InstallerISOPath:  installerISOAbs,
 		NVRAMPath:         nvramPath,
 		OVMFCodePath:      ovmfCode,
 		HostArch:          hostArchRuntime(),

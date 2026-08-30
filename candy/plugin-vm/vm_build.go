@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/opencharly/sdk/kit"
 	"github.com/opencharly/spec/spec"
@@ -111,7 +112,21 @@ func (c *VmBuildCmd) Run() error {
 		}
 		return nil
 
+	case "iso":
+		var distro DistroDef
+		if err := json.Unmarshal(reply.DistroJSON, &distro); err != nil {
+			return fmt.Errorf("decoding resolved distro: %w", err)
+		}
+		res, err := BuildIsoVM(&vmSpec, reply.OutputDir, reply.VmStateDir, reply.ExistingState, &distro, reply.Force)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Wrote %s (blank — the installer partitions it)\n", res.DiskPath)
+		fmt.Fprintf(os.Stderr, "Installer %s (sha256=%s)\n", res.InstallerIsoRef, res.InstallerSHA256)
+		fmt.Fprintf(os.Stderr, "Wrote %s (answers: %s)\n", res.SeedIsoPath, strings.Join(res.SeedFiles, ", "))
+		return nil
+
 	default:
-		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of cloud_image, bootc, bootstrap)", c.Box, reply.SourceKind)
+		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", c.Box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))
 	}
 }

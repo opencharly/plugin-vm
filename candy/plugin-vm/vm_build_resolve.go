@@ -36,7 +36,7 @@ import (
 
 // knownVmSourceKinds lists the source.kind values `charly vm build` supports. Used by the
 // unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
-var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap"}
+var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso"}
 
 // noVmEntityErr is the shared "no kind:vm entity" error both entity-lookup failure paths raise.
 func noVmEntityErr(boxName string) error {
@@ -326,9 +326,58 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 			return spec.VmBuildReply{}, err
 		}
 
+	case "iso":
+		// An iso VM needs the DISTRO and nothing else. The distro owns the answer FORMAT
+		// (which files, in what syntax) via its installer: block; the vm entity owns the
+		// DATA. There is no builder image and no box to resolve — the installer ISO is
+		// fetched from a URL, so no host-only lookup is involved.
+		if err := resolveVmBuildIsoDistro(ctx, ex, dir, vmSpec, &reply); err != nil {
+			return spec.VmBuildReply{}, err
+		}
+
 	default:
 		return spec.VmBuildReply{}, fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", boxName, vmSpec.Source.Kind, strings.Join(knownVmSourceKinds, ", "))
 	}
 
 	return reply, nil
+}
+
+// resolveVmBuildIsoDistro resolves the DISTRO for an `iso` source and nothing else.
+//
+// An iso VM is the least-resolved of the four source kinds: there is no builder image to
+// build, no bootc box to look up, and the installer image comes from a URL rather than
+// from anything on this host. All it needs is the distro's `installer:` block — the answer
+// FORMAT — which lives in the same embedded build vocabulary the bootstrap path reads.
+//
+// The distro is resolved through ResolveInherits like the bootstrap path, so a distro that
+// inherits its installer from a parent (an Arch derivative reusing archinstall, say) works
+// without restating it.
+func resolveVmBuildIsoDistro(ctx context.Context, ex *sdk.Executor, dir string, vmSpec *VmSpec, reply *spec.VmBuildReply) error {
+	if vmSpec.Source.Distro == "" {
+		return fmt.Errorf("source.distro is required for iso VMs — the distro owns the installer answer FORMAT, and a renderer that guessed it from the URL is exactly the failure this split exists to prevent")
+	}
+	if vmSpec.DiskSize == "" {
+		return fmt.Errorf("disk_size is required for iso VMs — an installer partitions a blank disk and cannot grow one")
+	}
+	distroCfg, _, lerr := loadVmBuildYmlSections(ctx, ex, dir)
+	if lerr != nil {
+		return fmt.Errorf("loading the distro section from the embedded build vocabulary: %w", lerr)
+	}
+	if distroCfg == nil {
+		return fmt.Errorf("the distro: section of the embedded vocabulary (charly/charly.yml) is empty; cannot resolve %q", vmSpec.Source.Distro)
+	}
+	distro, ok := distroCfg.Distro[vmSpec.Source.Distro]
+	if !ok {
+		return fmt.Errorf("distro %q not declared in the embedded build vocabulary (charly/charly.yml)", vmSpec.Source.Distro)
+	}
+	distro = distroCfg.ResolveInherits(distro, 10)
+	if distro.Installer == nil {
+		return fmt.Errorf("distro %q declares no installer: block in the embedded build vocabulary (charly/charly.yml) — it has no unattended-install answer format, so an iso source cannot run unattended against it", vmSpec.Source.Distro)
+	}
+	distroJSON, jerr := json.Marshal(distro)
+	if jerr != nil {
+		return fmt.Errorf("marshalling resolved distro: %w", jerr)
+	}
+	reply.DistroJSON = distroJSON
+	return nil
 }
