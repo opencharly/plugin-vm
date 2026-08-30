@@ -109,7 +109,7 @@ func readSeedRoot(isoPath string) (map[string]isoEntry, error) {
 	}
 
 	dir := make([]byte, rootLen)
-	if _, err := f.ReadAt(dir, int64(rootLA(rootLBA))*isoSectorSize); err != nil {
+	if _, err := f.ReadAt(dir, int64(rootLBA)*isoSectorSize); err != nil {
 		return nil, fmt.Errorf("reading the root directory: %w", err)
 	}
 
@@ -153,8 +153,6 @@ func readSeedRoot(isoPath string) (map[string]isoEntry, error) {
 	}
 	return out, nil
 }
-
-func rootLA(lba uint32) uint32 { return lba }
 
 // normalizeISOName strips the ISO9660 version suffix (";1") that xorriso and genisoimage
 // both append, so a caller asks for the name it authored rather than the name the format
