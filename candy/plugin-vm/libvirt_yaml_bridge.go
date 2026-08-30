@@ -183,6 +183,16 @@ func buildDomainOS(spec *VmSpec, rt VmRuntimeParams) *libvirtxml.DomainOS {
 		BootDevices: []libvirtxml.DomainBootDevice{{Dev: "hd"}},
 	}
 
+	// An installer ISO adds a SECOND boot device AFTER the disk, and the order is the whole
+	// mechanism by which an unattended ISO install terminates: an empty disk is not
+	// bootable, so the firmware falls through to the installer on the first boot; once the
+	// installer has written the disk, the disk boots and the ISO is never reached again.
+	// Nothing has to detect the end of the install, and nothing is ever ejected or
+	// detached. Reversed, the guest would reinstall over itself on every boot.
+	if rt.InstallerISOPath != "" {
+		os.BootDevices = append(os.BootDevices, libvirtxml.DomainBootDevice{Dev: "cdrom"})
+	}
+
 	switch firmware {
 	case "uefi-insecure", "uefi-secure":
 		os.Firmware = "efi"
@@ -817,6 +827,19 @@ func buildDomainDevices(spec *VmSpec, rt VmRuntimeParams) *libvirtxml.DomainDevi
 			Driver:   &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"},
 			Source:   &libvirtxml.DomainDiskSource{File: &libvirtxml.DomainDiskSourceFile{File: rt.SeedISOPath}},
 			Target:   &libvirtxml.DomainDiskTarget{Dev: "sda", Bus: "sata"},
+			ReadOnly: &libvirtxml.DomainDiskReadOnly{},
+		})
+	}
+	// Auto-synthesized installer ISO cdrom (source.kind: iso).
+	// A SECOND cdrom beside the answers volume above, not a replacement for it: the
+	// installer is what runs, and the answers volume is what stops it prompting. Its own
+	// target (sdb) so both are addressable.
+	if rt.InstallerISOPath != "" {
+		out.Disks = append(out.Disks, libvirtxml.DomainDisk{
+			Device:   "cdrom",
+			Driver:   &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"},
+			Source:   &libvirtxml.DomainDiskSource{File: &libvirtxml.DomainDiskSourceFile{File: rt.InstallerISOPath}},
+			Target:   &libvirtxml.DomainDiskTarget{Dev: "sdb", Bus: "sata"},
 			ReadOnly: &libvirtxml.DomainDiskReadOnly{},
 		})
 	}
