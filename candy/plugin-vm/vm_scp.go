@@ -15,9 +15,10 @@ import (
 // needed, and a leading `~` in the destination resolves against the guest
 // user's $HOME (faithful scp semantics).
 type VmScpCmd struct {
-	VM  string `arg:"" help:"kind:vm entity name (uses its managed charly-<name> ssh alias)"`
-	Src string `arg:"" help:"local source file to copy into the guest (a leading ~ resolves against the host $HOME)"`
-	Dst string `arg:"" help:"destination path in the guest (a leading ~ resolves against the guest user's $HOME)"`
+	VM     string `arg:"" help:"kind:vm entity name (uses its managed charly-<name> ssh alias)"`
+	Src    string `arg:"" help:"local source file to copy into the guest (a leading ~ resolves against the host $HOME)"`
+	Dst    string `arg:"" help:"destination path in the guest (a leading ~ resolves against the guest user's $HOME)"`
+	Domain string `name:"domain" help:"Per-deploy domain identity (copies into charly-<domain>, keyed by the DEPLOY not the entity); absent for a direct scp (domain = entity). A check bed's domain is the BED name."`
 }
 
 func (c *VmScpCmd) Run() error {
@@ -25,7 +26,7 @@ func (c *VmScpCmd) Run() error {
 	if err != nil {
 		return fmt.Errorf("source %q: %w", c.Src, err)
 	}
-	return scpToVm(context.Background(), c.VM, srcAbs, c.Dst, "")
+	return scpToVm(context.Background(), domainOr(c.VM, c.Domain), srcAbs, c.Dst, "")
 }
 
 // scpToVm copies srcAbs (an already host-resolved local file) into the named VM

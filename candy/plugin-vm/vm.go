@@ -829,6 +829,7 @@ func connectUnixConsole(socketPath string) error {
 type VmSshCmd struct {
 	Box      string   `arg:"" help:"Box name"`
 	Instance string   `short:"i" name:"instance" help:"Instance name"`
+	Domain   string   `name:"domain" help:"Per-deploy domain identity (ssh charly-<domain>, keyed by the DEPLOY not the entity); absent for a direct ssh (domain = entity). A check bed's domain is the BED name."`
 	Port     int      `short:"p" name:"port" help:"Override the host SSH port (default: resolved from the managed ssh_config alias)"`
 	User     string   `short:"l" name:"user" help:"Override the SSH username (default: resolved from the managed ssh_config alias)"`
 	Args     []string `arg:"" optional:"" help:"Additional SSH arguments or command"`
@@ -845,7 +846,7 @@ func (c *VmSshCmd) Run() error {
 	// could never see (the auto port lives in VmDeployState, not the vm spec) — and the
 	// generated key from ~/.config/charly/ssh_config. The alias's Host stanza name IS
 	// `vmName` (`charly-<box>[-<instance>]`); -l/-p explicitly override it.
-	alias := vmName(c.Box, c.Instance)
+	alias := vmName(domainOr(c.Box, c.Domain), c.Instance)
 	args := []string{
 		"ssh",
 		"-o", "StrictHostKeyChecking=no",
