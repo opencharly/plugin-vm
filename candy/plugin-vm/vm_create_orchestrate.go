@@ -99,6 +99,14 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		if spec.Source.Kind == "cloud_image" && spec.CloudInit != nil {
 			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
 		}
+		// An iso source needs its answers volume per-domain for the SAME reason: the
+		// build's seed carries the ENTITY's public key, and a deploy's guest is reachable
+		// only with the DOMAIN's. Without this the volume was omitted from the domain
+		// entirely and the installer fell back to its interactive wizard — caught by
+		// check-omarchy-iso-vm, which is exactly what that bed is for.
+		if spec.Source.Kind == "iso" {
+			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
+		}
 	} else {
 		baseSeed := filepath.Join(vmDiskDir(entity), "seed.iso")
 		if _, err := os.Stat(baseSeed); err == nil {
@@ -137,6 +145,16 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	pubKey, err := resolveSSHPubKeyForSpec(spec, vmStateDir)
 	if err != nil {
 		return err
+	}
+
+	// Re-pack the iso answers volume for THIS domain: every answer exactly as the build
+	// rendered it, except authorized_keys, which carries this domain's key. Runs after the
+	// key is resolved and before the domain is defined.
+	if spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" {
+		if err := RepackPerDomainSeed(vmDiskDir(entity), seedISOAbs, pubKey); err != nil {
+			return fmt.Errorf("rendering the per-domain answers volume: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Wrote per-domain answers volume %s\n", seedISOAbs)
 	}
 
 	// Apply D13 key-injection resolution. The credential targets the
