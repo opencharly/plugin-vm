@@ -20,20 +20,24 @@ import (
 
 // VmCmd groups VM management subcommands.
 type VmCmd struct {
-	Build    VmBuildCmd    `cmd:"" help:"Build QCOW2/RAW disk image from bootc container"`
-	Clone    VmCloneCmd    `cmd:"" help:"Clone a new VM from another VM's snapshot (writes a kind:vm declaration)"`
-	Console  VmConsoleCmd  `cmd:"" help:"Attach to VM serial console"`
-	CpImage  VmCpBoxCmd    `cmd:"" name:"cp-box" help:"Load a host image into a running VM guest's podman storage"`
-	Create   VmCreateCmd   `cmd:"" help:"Create a VM from a disk image"`
-	Destroy  VmDestroyCmd  `cmd:"" help:"Remove VM definition and optionally delete disk"`
-	Gpu      VmGpuCmd      `cmd:"" help:"Inspect host VFIO/GPU-passthrough readiness (status, list)"`
-	Import   VmImportCmd   `cmd:"" help:"Adopt an existing libvirt-managed VM into charly configuration"`
-	List     VmListCmd     `cmd:"" help:"List VMs and their status"`
-	Scp      VmScpCmd      `cmd:"" help:"Copy a local file into a running VM guest over SSH"`
-	Snapshot VmSnapshotCmd `cmd:"" help:"Manage VM snapshots (create, list, delete, revert, promote)"`
-	Ssh      VmSshCmd      `cmd:"" help:"SSH into a VM"`
-	Start    VmStartCmd    `cmd:"" help:"Start a VM"`
-	Stop     VmStopCmd     `cmd:"" help:"Stop a VM (graceful shutdown)"`
+	Build      VmBuildCmd      `cmd:"" help:"Build QCOW2/RAW disk image from bootc container"`
+	Clone      VmCloneCmd      `cmd:"" help:"Clone a new VM from another VM's snapshot (writes a kind:vm declaration)"`
+	Console    VmConsoleCmd    `cmd:"" help:"Attach to VM serial console"`
+	CpImage    VmCpBoxCmd      `cmd:"" name:"cp-box" help:"Load a host image into a running VM guest's podman storage"`
+	Create     VmCreateCmd     `cmd:"" help:"Create a VM from a disk image"`
+	Destroy    VmDestroyCmd    `cmd:"" help:"Remove VM definition and optionally delete disk"`
+	Gpu        VmGpuCmd        `cmd:"" help:"Inspect host VFIO/GPU-passthrough readiness (status, list)"`
+	Import     VmImportCmd     `cmd:"" help:"Adopt an existing libvirt-managed VM into charly configuration"`
+	List       VmListCmd       `cmd:"" help:"List VMs and their status"`
+	Screenshot VmScreenshotCmd `cmd:"" help:"Capture the guest's screen to a PNG (works with no ssh, no network, no guest agent)"`
+	Scp        VmScpCmd        `cmd:"" help:"Copy a local file into a running VM guest over SSH"`
+	Seed       VmSeedCmd       `cmd:"" help:"Inspect the rendered installer answers volume (ls, cat)"`
+	Sendkey    VmSendkeyCmd    `cmd:"" help:"Send key presses to the guest console when SSH is what is broken"`
+	Snapshot   VmSnapshotCmd   `cmd:"" help:"Manage VM snapshots (create, list, delete, revert, promote)"`
+	Ssh        VmSshCmd        `cmd:"" help:"SSH into a VM"`
+	Start      VmStartCmd      `cmd:"" help:"Start a VM"`
+	Stop       VmStopCmd       `cmd:"" help:"Stop a VM (graceful shutdown)"`
+	Type       VmTypeCmd       `cmd:"" help:"Type a line of text on the guest console (sendkey for a whole string)"`
 }
 
 // vmName returns the VM name for an image and optional instance.
