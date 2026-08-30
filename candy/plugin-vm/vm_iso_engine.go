@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -110,6 +111,17 @@ func BuildIsoVM(
 	}
 	if err := vmshared.WriteLabeledISO(seedPath, volumeID, files); err != nil {
 		return IsoBuildResult{}, fmt.Errorf("writing answers volume: %w", err)
+	}
+	// Persist the rendered files themselves beside the volume.
+	//
+	// A DEPLOY renders its own per-domain seed, because two domains sharing one seed share
+	// one SSH key — the same reason the cloud_image path re-renders per domain. But the
+	// answer FORMAT lives on the distro, and `vm create` has no distro resolved. Keeping
+	// the rendered files here lets create re-pack a per-domain volume by swapping the one
+	// file that is per-domain (authorized_keys) and leaving every other answer byte-identical
+	// to what this build produced.
+	if err := writeSeedSidecar(outputDir, volumeID, files); err != nil {
+		return IsoBuildResult{}, fmt.Errorf("writing answers sidecar: %w", err)
 	}
 
 	// --- Step 3: Allocate the blank disk the installer writes into. ---
@@ -293,4 +305,72 @@ func qemuImgCreateBlank(diskPath, size string) error {
 		return fmt.Errorf("qemu-img create blank %s %s: %w", diskPath, size, err)
 	}
 	return nil
+}
+
+// seedSidecar is the rendered answer set persisted beside seed.iso at build time, so a
+// per-domain `vm create` can re-pack the volume without re-resolving the distro.
+type seedSidecar struct {
+	VolumeID string            `json:"volume_id"`
+	Files    map[string]string `json:"files"`
+}
+
+func seedSidecarPath(outputDir string) string {
+	return filepath.Join(outputDir, ".seed-answers.json")
+}
+
+func writeSeedSidecar(outputDir, volumeID string, files map[string]string) error {
+	blob, err := json.MarshalIndent(seedSidecar{VolumeID: volumeID, Files: files}, "", "  ")
+	if err != nil {
+		return err
+	}
+	// 0600: an ENCRYPTED install's answers carry the LUKS passphrase in plaintext, because
+	// the installer needs it to create the volume. The volume itself is world-readable by
+	// necessity once attached to the guest; this host-side copy need not be.
+	return os.WriteFile(seedSidecarPath(outputDir), blob, 0o600)
+}
+
+// ReadSeedSidecar loads the rendered answer set a previous BuildIsoVM persisted. Reports
+// ok=false when the entity was never built as an iso source, which the caller treats as
+// "nothing to re-pack" rather than an error.
+func ReadSeedSidecar(outputDir string) (volumeID string, files map[string]string, ok bool) {
+	blob, err := os.ReadFile(seedSidecarPath(outputDir))
+	if err != nil {
+		return "", nil, false
+	}
+	var sc seedSidecar
+	if json.Unmarshal(blob, &sc) != nil || sc.VolumeID == "" || len(sc.Files) == 0 {
+		return "", nil, false
+	}
+	return sc.VolumeID, sc.Files, true
+}
+
+// RepackPerDomainSeed writes a per-domain answers volume: every answer exactly as the build
+// rendered it, except authorized_keys, which carries THIS domain's public key.
+//
+// A deploy must not share one seed across domains — that is one SSH key for every guest,
+// and the cloud_image path re-renders per domain for the same reason. Only authorized_keys
+// is per-domain; hostname, disk, credentials and partition geometry describe the INSTALL
+// and are properties of the entity.
+//
+// An empty pubKey leaves the build's authorized_keys untouched rather than removing it: on
+// a distro that treats the file's presence as "enable sshd and open the firewall", deleting
+// it would silently produce an unreachable guest.
+func RepackPerDomainSeed(outputDir, destSeedPath, pubKey string) error {
+	volumeID, files, ok := ReadSeedSidecar(outputDir)
+	if !ok {
+		return fmt.Errorf("no rendered answers found at %s — run `charly vm build` first", seedSidecarPath(outputDir))
+	}
+	perDomain := make(map[string]string, len(files))
+	for name, content := range files {
+		perDomain[name] = content
+	}
+	if pubKey != "" {
+		if _, present := perDomain["authorized_keys"]; present {
+			perDomain["authorized_keys"] = strings.TrimRight(pubKey, "\n") + "\n"
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(destSeedPath), 0o755); err != nil {
+		return fmt.Errorf("creating per-domain seed dir: %w", err)
+	}
+	return vmshared.WriteLabeledISO(destSeedPath, volumeID, perDomain)
 }
