@@ -349,6 +349,37 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 	knownHostsPath := filepath.Join(stateDir, "known_hosts")
 	// Best-effort: ignore "no such file" on first-create.
 	_ = os.Remove(knownHostsPath)
+
+	// An INSTALLER-driven guest changes its SSH host identity exactly once, and pinning
+	// across that change makes the guest permanently unreachable.
+	//
+	// The live installer environment brings up its own sshd with freshly generated host keys
+	// (Omarchy's ISO has cloud-init do this, visible on its console). The first thing to
+	// connect — the bed runner's readiness gate, before any deploy — pins that key under
+	// accept-new. The installer then finishes and the guest reboots into the INSTALLED
+	// system, whose host keys are entirely different, and every connection after that fails:
+	//
+	//	Offending ED25519 key in .../known_hosts:1
+	//	Host key for [127.0.0.1]:<port> has changed and you have requested strict checking.
+	//	Host key verification failed.
+	//
+	// Polling cannot recover from it, so the readiness gate burns its whole cap and the
+	// deploy never starts. Measured: with the stale line present the managed alias returns
+	// "Host key verification failed"; with it removed the SAME alias connects immediately.
+	//
+	// The fix belongs HERE, on the alias, because the alias is what every consumer uses —
+	// the bed runner's readiness gate, plugin-deploy-vm's prepare-venue, and `charly vm ssh`
+	// alike. Fixing it in any one of them leaves the others broken; two earlier attempts did
+	// exactly that.
+	//
+	// /dev/null rather than a relaxed policy: accept-new still applies, so the first
+	// connection is accepted as before, and nothing is ever RECORDED to conflict with. What
+	// is given up is host-key continuity for a per-domain loopback guest whose login key
+	// charly generated itself — against a guest that is otherwise unusable.
+	if spec.Source.Kind == "iso" {
+		knownHostsPath = os.DevNull
+	}
+
 	stanza := VmSshStanza{
 		Alias:          VmSshAlias(domainName),
 		Hostname:       "127.0.0.1",
