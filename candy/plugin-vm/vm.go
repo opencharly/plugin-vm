@@ -758,9 +758,18 @@ type VmConsoleCmd struct {
 	Box      string `arg:"" help:"Box name"`
 	Instance string `short:"i" name:"instance" help:"Instance name"`
 	Domain   string `name:"domain" help:"Per-deploy domain identity (console charly-<domain>, keyed by the DEPLOY not the entity); absent for a direct console (domain = entity)."`
+	Dump     bool   `name:"dump" help:"Print the recorded serial log and exit, instead of attaching. Works with no TTY, on a headless VM, and after the guest has died."`
+	Lines    int    `name:"lines" short:"n" default:"0" help:"With --dump, print only the last N lines (0 = all)."`
 }
 
 func (c *VmConsoleCmd) Run() error {
+	// --dump reads the recorded log rather than attaching. This is the ONLY way to see a
+	// headless guest's console: attaching needs a controlling TTY (so it cannot run from a
+	// bed, a script, or an agent) and a pty keeps no history, so a guest that already failed
+	// has nothing left to show.
+	if c.Dump {
+		return dumpVmSerialLog(vmName(domainOr(c.Box, c.Domain), c.Instance), c.Lines)
+	}
 	reply, err := hostConfigResolve(c.Box)
 	if err != nil {
 		return err
@@ -861,4 +870,36 @@ func (c *VmSshCmd) Run() error {
 	args = append(args, alias)
 	args = append(args, c.Args...)
 	return syscall.Exec(sshBin, args, os.Environ())
+}
+
+// dumpVmSerialLog prints a domain's recorded serial console.
+//
+// The absent-file case is the one worth getting right: a domain created before serial
+// logging existed has no <log> element in its XML, and libvirt will never write one for it.
+// Saying "no such file" would send the reader looking for a missing directory; the fix is a
+// recreate, so the error says that.
+func dumpVmSerialLog(domainName string, lines int) error {
+	path := serialLogPathFor(domainName)
+	if path == "" {
+		return fmt.Errorf("cannot determine the serial log path for %s", domainName)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no serial log for %s at %s.\n"+
+				"A domain defined before serial logging carries no <log> element and libvirt "+
+				"will never write one for it. Recreate the domain (`charly vm create`) and the "+
+				"log appears from its next boot.", domainName, path)
+		}
+		return fmt.Errorf("reading the serial log for %s: %w", domainName, err)
+	}
+	if lines > 0 {
+		all := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+		if len(all) > lines {
+			all = all[len(all)-lines:]
+		}
+		body = []byte(strings.Join(all, "\n") + "\n")
+	}
+	_, err = os.Stdout.Write(body)
+	return err
 }

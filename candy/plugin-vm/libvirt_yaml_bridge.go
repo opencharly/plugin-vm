@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -886,11 +887,33 @@ func buildDomainDevices(spec *VmSpec, rt VmRuntimeParams) *libvirtxml.DomainDevi
 		}
 	}
 
-	// Auto-synthesized serial + console for `charly vm console`.
-	out.Serials = append(out.Serials, libvirtxml.DomainSerial{
+	// Auto-synthesized serial + console for `charly vm console`, WITH a log file.
+	//
+	// The log is what makes a headless guest diagnosable at all. `vm console` attaches to a
+	// pty, which needs a controlling TTY and keeps no history — so for a VM with no video
+	// device there was no way to see the boot at all:
+	//
+	//	$ charly vm screenshot <headless-vm>
+	//	VM … was defined with NO video device
+	//	$ charly vm console <headless-vm>
+	//	error: Cannot run interactive console without a controlling TTY
+	//
+	// Both true, both unhelpful, and between them the guest was opaque. Every bootstrap VM
+	// is headless by design (console=ttyS0 and no graphics), which is exactly the class of
+	// guest whose boot most needs reading.
+	//
+	// libvirt writes this file itself as the guest emits, so the history survives the guest
+	// dying — the case where it matters most. The path is derived from the domain name
+	// rather than plumbed through VmRuntimeParams because that struct lives in the sdk, and
+	// a field there would make this a cross-repo repin chain for one string.
+	serial := libvirtxml.DomainSerial{
 		Source: &libvirtxml.DomainChardevSource{Pty: &libvirtxml.DomainChardevSourcePty{}},
 		Target: &libvirtxml.DomainSerialTarget{Port: new(uint)},
-	})
+	}
+	if p := serialLogPathFor(rt.Name); p != "" {
+		serial.Log = &libvirtxml.DomainChardevLog{File: p}
+	}
+	out.Serials = append(out.Serials, serial)
 	out.Consoles = append(out.Consoles, libvirtxml.DomainConsole{
 		Source: &libvirtxml.DomainChardevSource{Pty: &libvirtxml.DomainChardevSourcePty{}},
 		Target: &libvirtxml.DomainConsoleTarget{Type: "serial", Port: new(uint)},
@@ -1944,4 +1967,21 @@ func hexU64Ptr(s string) *uint64 {
 		}
 	}
 	return &n
+}
+
+// serialLogPathFor returns the per-domain serial log path, or "" when it cannot be
+// determined — in which case the domain is rendered exactly as before rather than failing.
+//
+// The directory is the same per-domain state dir `vm create` already creates (id_ed25519,
+// nvram, the per-domain seed), so nothing new has to be provisioned and the log is removed
+// with the domain by `vm destroy`.
+func serialLogPathFor(domainName string) string {
+	if domainName == "" {
+		return ""
+	}
+	root, err := vmDir()
+	if err != nil || root == "" {
+		return ""
+	}
+	return filepath.Join(root, domainName, "serial.log")
 }
