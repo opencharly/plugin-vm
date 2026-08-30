@@ -242,11 +242,28 @@ func buildBootstrapDisk(spec *VmSpec, distro *DistroDef, builderRef, rootfsTar, 
 	if rootfsKind == "" {
 		rootfsKind = "ext4"
 	}
-	prelude, finalize, err := EmitDiskBuildScript(DiskLayout{
+	// The on-disk shape is the DISTRO's identity, not a per-VM choice: Omarchy's ESP is
+	// at /boot and its root is a @/@home/@log/@pkg subvolume set on every install. A
+	// distro that declares no disk_layout gets the historical layout unchanged, because
+	// EmitDiskBuildScript defaults EspMountPoint to /boot/efi and treats nil Subvolumes
+	// as a bare filesystem — which the byte-parity test in vm_disk_subvolume_test.go
+	// pins.
+	layout := DiskLayout{
 		SizeBytesOrSuffix: spec.DiskSize,
 		Rootfs:            rootfsKind,
 		Mnt:               "/mnt",
-	})
+	}
+	if distro != nil && distro.DiskLayout != nil {
+		layout.EspMountPoint = distro.DiskLayout.EspMountPoint
+		for _, sv := range distro.DiskLayout.Subvolume {
+			layout.Subvolumes = append(layout.Subvolumes, Subvolume{
+				Name:         sv.Name,
+				MountPoint:   sv.MountPoint,
+				MountOptions: sv.MountOptions,
+			})
+		}
+	}
+	prelude, finalize, err := EmitDiskBuildScript(layout)
 	if err != nil {
 		return "", fmt.Errorf("emitting disk build script: %w", err)
 	}
