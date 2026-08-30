@@ -55,6 +55,26 @@ func BuildIsoVM(
 	if distro.Installer == nil {
 		return IsoBuildResult{}, fmt.Errorf("iso vm: distro %q declares no installer: — it cannot be installed unattended", vmSpec.Source.Distro)
 	}
+	// kernel_args is DECLARED on the iso arm and NOT IMPLEMENTED here, so it is rejected
+	// rather than ignored.
+	//
+	// Appending to an installer's cmdline means rewriting the boot configuration INSIDE a
+	// multi-GiB ISO — repacking the image, or extracting its kernel and initrd to boot them
+	// directly with -kernel/-initrd, which then diverges from how the medium actually boots.
+	// Neither is a small change, and neither is needed by anything shipping today.
+	//
+	// What is NOT acceptable is accepting the field and silently doing nothing with it. An
+	// operator adding console=ttyS0 to debug a stalled install would get exactly the silence
+	// they were trying to fix, and would conclude the installer never started. That failure
+	// shape has cost this codebase real time twice already (ResolveInherits and
+	// resolveDistro each silently dropped fields every gate accepted), so the third one
+	// errors instead.
+	if vmSpec.Source.KernelArgs != "" {
+		return IsoBuildResult{}, fmt.Errorf("iso vm: source.kernel_args is not implemented for installer ISOs "+
+			"(appending to the cmdline requires rewriting the boot config inside the ISO). "+
+			"It is rejected rather than ignored so it cannot look like it took effect; "+
+			"got kernel_args=%q", vmSpec.Source.KernelArgs)
+	}
 
 	// --- Step 1: Fetch + verify the installer ISO. ---
 	// FetchArtifact, not a local copy of a downloader: resumable, sha256-verified, flocked

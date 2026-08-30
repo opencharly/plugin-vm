@@ -245,3 +245,29 @@ func TestInstallerSeedContext_UnresolvableKeyIsNotFatal(t *testing.T) {
 		t.Fatalf("no key was resolvable, so none must be seeded; got %v", ctx.SSHAuthorizedKeys)
 	}
 }
+
+// kernel_args is declared on the iso arm of #VmSource and NOT implemented by this engine,
+// so it must be REJECTED, never ignored.
+//
+// The failure mode of ignoring it is specifically nasty: an operator adds console=ttyS0 to
+// debug an install that appears to stall, gets exactly the silence they were trying to fix,
+// and concludes the installer never started. Two silent-field-drops were fixed in this
+// same cutover (spec's ResolveInherits and plugin-distro's resolveDistro), so a third one
+// is not being introduced deliberately.
+func TestBuildIsoVM_KernelArgsIsRejectedNotIgnored(t *testing.T) {
+	s := isoSpec(&spec.VmInstaller{Username: "user", Password_hash: "$6$x$y"})
+	s.Source.KernelArgs = "console=ttyS0,115200"
+	_, err := BuildIsoVM(s, t.TempDir(), t.TempDir(), nil,
+		&DistroDef{Installer: &spec.DistroInstaller{VolumeID: "cidata"}}, false)
+	if err == nil {
+		t.Fatal("source.kernel_args must be rejected for iso VMs while it is unimplemented")
+	}
+	if !strings.Contains(err.Error(), "kernel_args") {
+		t.Fatalf("the error must name the field; got: %v", err)
+	}
+	// The rejection must fire BEFORE the multi-GiB fetch. An operator who set an
+	// unsupported field should find out in a second, not after a download.
+	if strings.Contains(err.Error(), "fetch") {
+		t.Fatalf("the guard fired after the fetch; it must be a precondition: %v", err)
+	}
+}
