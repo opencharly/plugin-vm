@@ -143,6 +143,13 @@ func qemuScreendump(domain, dst string) error {
 		return err
 	}
 	defer q.Close() //nolint:errcheck
+	return screendumpOverQMP(q, domain, dst)
+}
+
+// screendumpOverQMP is the production screendump, split from socket discovery so a test can
+// drive it against a REAL qemu. A helper that only a mock ever exercises proves nothing
+// about the monitor's actual replies, which is the whole risk in a hand-written client.
+func screendumpOverQMP(q *qmpConn, domain, dst string) error {
 	// qemu writes the file itself, so it must be an ABSOLUTE path — a relative one lands in
 	// qemu's cwd, which is not the operator's, and the verb would then report success over a
 	// file that is not there.
@@ -154,6 +161,8 @@ func qemuScreendump(domain, dst string) error {
 	if err != nil {
 		return err
 	}
+	// qemu reports a monitor-level failure in the reply TEXT with a zero QMP status. Dropping
+	// that text reports success for a capture that was never written.
 	if s := strings.TrimSpace(out); s != "" {
 		return fmt.Errorf("screendump %s: %s", domain, noScreenHint(domain, s))
 	}
@@ -339,19 +348,7 @@ func sendGuestKeys(entity, domain, instance string, keys []string) error {
 			return err
 		}
 		defer q.Close() //nolint:errcheck
-		for _, k := range keys {
-			// The monitor's own key names ARE this package's vocabulary, so nothing is
-			// translated here; qemu reports an unknown key in the reply text with a zero
-			// status, which is why that text is checked rather than dropped.
-			out, err := q.humanMonitor("sendkey " + k)
-			if err != nil {
-				return err
-			}
-			if s := strings.TrimSpace(out); s != "" {
-				return fmt.Errorf("sendkey %q to %s: %s", k, name, s)
-			}
-		}
-		return nil
+		return sendKeysOverQMP(q, name, keys)
 	}
 
 	virsh, err := exec.LookPath("virsh")
@@ -473,4 +470,24 @@ func vmMonitorSocket(domainName, file string) (string, error) {
 		return "", fmt.Errorf("no monitor socket at %s — is %s running?", p, domainName)
 	}
 	return p, nil
+}
+
+// sendKeysOverQMP is the production key burst, split from socket discovery so a test can
+// drive it against a REAL qemu — including the failure direction.
+func sendKeysOverQMP(q *qmpConn, name string, keys []string) error {
+	for _, k := range keys {
+		// The monitor's own key names ARE this package's vocabulary, so nothing is translated
+		// here. qemu reports an unknown key in the reply TEXT with a zero QMP status, which is
+		// why that text is checked rather than dropped: without the check, a burst that the
+		// guest never received is reported as sent, and the operator concludes the GUEST is
+		// unresponsive.
+		out, err := q.humanMonitor("sendkey " + k)
+		if err != nil {
+			return err
+		}
+		if s := strings.TrimSpace(out); s != "" {
+			return fmt.Errorf("sendkey %q to %s: %s", k, name, s)
+		}
+	}
+	return nil
 }
