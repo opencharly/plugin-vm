@@ -156,7 +156,23 @@ func installerSeedContext(vmSpec *VmSpec, vmStateDir string) (spec.InstallerSeed
 		return spec.InstallerSeedContext{}, fmt.Errorf("iso vm: source.installer is required — without it the install is not unattended and would sit at the installer's first prompt")
 	}
 
+	// The DISK SIZE, in bytes, so the distro's template can compute a root partition.
+	// A real answer format states partition geometry as absolute numbers — archinstall
+	// indexes the partition's size key with no default and has no fill-remaining
+	// sentinel — and a seed rendered on the host cannot lsblk a disk that does not exist
+	// yet.
+	//
+	// UNCONDITIONAL, not "when set": the template arithmetic renders a NEGATIVE size from
+	// a zero value rather than failing, so a missing number would reach the installer as a
+	// plausible-looking wrong one. Parsed with parseDiskSizeBytes, the same parser the
+	// bootstrap path uses for the same string (R3).
+	diskBytes, derr := parseDiskSizeBytes(vmSpec.DiskSize)
+	if derr != nil {
+		return spec.InstallerSeedContext{}, fmt.Errorf("iso vm: parsing disk_size for the installer seed: %w", derr)
+	}
+
 	ctx := spec.InstallerSeedContext{
+		DiskSizeBytes:     diskBytes,
 		Hostname:          inst.Hostname,
 		Timezone:          inst.Timezone,
 		Locale:            inst.Locale,

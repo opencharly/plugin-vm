@@ -271,3 +271,45 @@ func TestBuildIsoVM_KernelArgsIsRejectedNotIgnored(t *testing.T) {
 		t.Fatalf("the guard fired after the fetch; it must be a precondition: %v", err)
 	}
 }
+
+// The disk size must reach the seed context in BYTES, unconditionally.
+//
+// The template arithmetic that consumes it renders a NEGATIVE size from a zero value
+// rather than failing (sdk asserts that behaviour in its own test), so a missing number
+// would not surface as an error — it would reach the installer as a plausible-looking
+// wrong one and mis-partition a disk. Hence unconditional, and hence a test.
+func TestInstallerSeedContext_DiskSizeReachesTheContextInBytes(t *testing.T) {
+	for _, tc := range []struct {
+		size string
+		want int64
+	}{
+		{"40G", 42949672960},
+		{"40GiB", 42949672960},
+		{"10240M", 10737418240},
+		{"536870912", 536870912},
+	} {
+		s := isoSpec(&spec.VmInstaller{Username: "user", Password_hash: "$6$x$y"})
+		s.DiskSize = tc.size
+		ctx, err := installerSeedContext(s, t.TempDir())
+		if err != nil {
+			t.Fatalf("disk_size %q: %v", tc.size, err)
+		}
+		if ctx.DiskSizeBytes != tc.want {
+			t.Errorf("disk_size %q\n got: %d\nwant: %d", tc.size, ctx.DiskSizeBytes, tc.want)
+		}
+	}
+}
+
+// An unparseable disk_size is an error here rather than a silent zero. Zero would render a
+// negative partition size downstream, which is the failure this guard exists to prevent.
+func TestInstallerSeedContext_UnparseableDiskSizeIsRejected(t *testing.T) {
+	s := isoSpec(&spec.VmInstaller{Username: "user", Password_hash: "$6$x$y"})
+	s.DiskSize = "forty gigs"
+	_, err := installerSeedContext(s, t.TempDir())
+	if err == nil {
+		t.Fatal("an unparseable disk_size must be an error, not a silent zero")
+	}
+	if !strings.Contains(err.Error(), "disk_size") {
+		t.Fatalf("the error must name the field; got: %v", err)
+	}
+}
