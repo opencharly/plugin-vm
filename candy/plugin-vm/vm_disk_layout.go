@@ -192,6 +192,29 @@ qemu-img convert -O qcow2 "$RAW" /out/disk.qcow2
 rm -f "$RAW"
 `
 
+// DiskLayoutFromDistro projects a distro's declared disk_layout onto a DiskLayout,
+// leaving every field the distro does not declare at its zero value so EmitDiskBuildScript
+// applies the historical defaults (ESP at /boot/efi, a bare root filesystem).
+//
+// Pure: no I/O, no globals. It exists as a named function rather than three lines inside
+// buildBootstrapDisk so the mapping the production path uses is the same one tests call —
+// a test that re-implemented it could pass while production diverged.
+func DiskLayoutFromDistro(d *DistroDef, sizeBytesOrSuffix, rootfs, mnt string) DiskLayout {
+	layout := DiskLayout{SizeBytesOrSuffix: sizeBytesOrSuffix, Rootfs: rootfs, Mnt: mnt}
+	if d == nil || d.DiskLayout == nil {
+		return layout
+	}
+	layout.EspMountPoint = d.DiskLayout.EspMountPoint
+	for _, sv := range d.DiskLayout.Subvolume {
+		layout.Subvolumes = append(layout.Subvolumes, Subvolume{
+			Name:         sv.Name,
+			MountPoint:   sv.MountPoint,
+			MountOptions: sv.MountOptions,
+		})
+	}
+	return layout
+}
+
 // EmitDiskBuildScript renders the prelude (partition + format + mount) and finalize (unmount +
 // qcow2 convert) halves of a privileged VM disk-build script. The caller stitches them around
 // its own rootfs install body. Returns (prelude, finalize) on success.

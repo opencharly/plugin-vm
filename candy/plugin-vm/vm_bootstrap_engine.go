@@ -242,11 +242,10 @@ func buildBootstrapDisk(spec *VmSpec, distro *DistroDef, builderRef, rootfsTar, 
 	if rootfsKind == "" {
 		rootfsKind = "ext4"
 	}
-	prelude, finalize, err := EmitDiskBuildScript(DiskLayout{
-		SizeBytesOrSuffix: spec.DiskSize,
-		Rootfs:            rootfsKind,
-		Mnt:               "/mnt",
-	})
+	// The on-disk shape is the DISTRO's identity, not a per-VM choice: Omarchy's ESP is
+	// at /boot and its root is a @/@home/@log/@pkg subvolume set on every install. A
+	// distro that declares no disk_layout gets the historical layout unchanged.
+	prelude, finalize, err := EmitDiskBuildScript(DiskLayoutFromDistro(distro, spec.DiskSize, rootfsKind, "/mnt"))
 	if err != nil {
 		return "", fmt.Errorf("emitting disk build script: %w", err)
 	}
