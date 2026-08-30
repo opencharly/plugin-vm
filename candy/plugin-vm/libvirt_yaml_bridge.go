@@ -820,8 +820,37 @@ func buildDomainDevices(spec *VmSpec, rt VmRuntimeParams) *libvirtxml.DomainDevi
 			Target: &libvirtxml.DomainDiskTarget{Dev: "vda", Bus: "virtio"},
 		})
 	}
-	// Auto-synthesized seed ISO cdrom.
-	if rt.SeedISOPath != "" {
+	// Auto-synthesized seed volume.
+	//
+	// An INSTALLER-driven VM gets it on VIRTIO-BLK; every other source kind keeps the SATA
+	// cdrom cloud-init expects. That is not a preference — it is the difference between an
+	// unattended install and one that stops at a wizard.
+	//
+	// An installer looks for its answers by FILESYSTEM LABEL, early, from a script the ISO
+	// runs on tty1. Omarchy's omarchy-cidata-load calls `udevadm settle` and then reads
+	// /dev/disk/by-label/cidata — but settle only drains the queue as it stands, and a SATA
+	// cdrom whose probe has not been QUEUED yet is not covered. The lookup misses, the
+	// script falls back to the interactive wizard, and the install stops with nobody at the
+	// keyboard. Running the same script a minute later finds the drive and installs fine,
+	// which is what makes it a race rather than a defect in the volume.
+	//
+	// virtio-blk enumerates far earlier and wins that race. Measured both ways against the
+	// real Omarchy 4.0.1 ISO: as a SATA cdrom the disk sat untouched at 197,248 bytes
+	// indefinitely; as a virtio disk the same seed installed unattended to 6,092,816,384
+	// bytes and reached the installed system's greeter, with no intervention.
+	//
+	// cloud_image/bootc/bootstrap are deliberately UNCHANGED. cloud-init finds a NoCloud
+	// source on either, it has never raced here, and moving those would be a behaviour
+	// change to every existing VM in exchange for nothing.
+	if rt.SeedISOPath != "" && rt.InstallerISOPath != "" {
+		out.Disks = append(out.Disks, libvirtxml.DomainDisk{
+			Device:   "disk",
+			Driver:   &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"},
+			Source:   &libvirtxml.DomainDiskSource{File: &libvirtxml.DomainDiskSourceFile{File: rt.SeedISOPath}},
+			Target:   &libvirtxml.DomainDiskTarget{Dev: "vdb", Bus: "virtio"},
+			ReadOnly: &libvirtxml.DomainDiskReadOnly{},
+		})
+	} else if rt.SeedISOPath != "" {
 		out.Disks = append(out.Disks, libvirtxml.DomainDisk{
 			Device:   "cdrom",
 			Driver:   &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"},
@@ -831,15 +860,15 @@ func buildDomainDevices(spec *VmSpec, rt VmRuntimeParams) *libvirtxml.DomainDevi
 		})
 	}
 	// Auto-synthesized installer ISO cdrom (source.kind: iso).
-	// A SECOND cdrom beside the answers volume above, not a replacement for it: the
-	// installer is what runs, and the answers volume is what stops it prompting. Its own
-	// target (sdb) so both are addressable.
+	// Beside the answers volume above, not a replacement for it: the installer is what
+	// runs, and the answers volume is what stops it prompting. It takes sda because the
+	// answers moved to virtio-blk, so this is the only SATA device.
 	if rt.InstallerISOPath != "" {
 		out.Disks = append(out.Disks, libvirtxml.DomainDisk{
 			Device:   "cdrom",
 			Driver:   &libvirtxml.DomainDiskDriver{Name: "qemu", Type: "raw"},
 			Source:   &libvirtxml.DomainDiskSource{File: &libvirtxml.DomainDiskSourceFile{File: rt.InstallerISOPath}},
-			Target:   &libvirtxml.DomainDiskTarget{Dev: "sdb", Bus: "sata"},
+			Target:   &libvirtxml.DomainDiskTarget{Dev: "sda", Bus: "sata"},
 			ReadOnly: &libvirtxml.DomainDiskReadOnly{},
 		})
 	}
