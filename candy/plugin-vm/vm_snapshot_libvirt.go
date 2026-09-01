@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"sync/atomic"
 
 	libvirt "github.com/digitalocean/go-libvirt"
 )
@@ -41,6 +42,14 @@ type snapshotDiskSrc struct {
 type snapshotDiskDrvr struct {
 	Type string `xml:"type,attr"`
 }
+
+// strictQuiesce is set by create-consistent (vm_snapshot_composites.go)
+// around its CreateSnapshot call. When set, a quiesce failure in
+// createExternalSnapshot is a HARD error — the best-effort fallback (retry
+// without the flag) is disabled. create-consistent's contract is "strict, no
+// silent fallback"; the fallback exists only for `create --quiesce`'s
+// documented best-effort behavior.
+var strictQuiesce atomic.Bool
 
 // createExternalSnapshot drives `virsh snapshot-create-as --disk-only`
 // equivalent via libvirt. Produces an overlay qcow2 (`outFile`) whose
@@ -108,8 +117,10 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 	if _, err := conn.l.DomainSnapshotCreateXML(dom, string(xmlBytes), uint32(flags)); err != nil {
 		// On guests without qemu-guest-agent, the Quiesce flag may
 		// fail. Retry without it as a fallback when --quiesce was
-		// requested but no agent is available.
-		if opts.Quiesce {
+		// requested but no agent is available — EXCEPT under
+		// create-consistent's strict mode, where a quiesce failure is a
+		// hard error (no silent fallback to a non-quiesced snapshot).
+		if opts.Quiesce && !strictQuiesce.Load() {
 			fmt.Fprintln(os.Stderr, "note: quiesce failed (qemu-guest-agent not available?); retrying without --quiesce")
 			flags &^= libvirt.DomainSnapshotCreateQuiesce
 			if _, err2 := conn.l.DomainSnapshotCreateXML(dom, string(xmlBytes), uint32(flags)); err2 != nil {

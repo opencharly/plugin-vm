@@ -308,6 +308,20 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 			}
 		case "destroy":
 			conn.gracefulStopDomain(dom)
+			// A domain with snapshots cannot be undefined ("cannot delete inactive
+			// domain with N snapshots"). The snapshot-anchored check-run mode leaves
+			// a golden snapshot on the bed's domain; teardown must remove the
+			// libvirt snapshot records before undefine. The registry-side snapshot
+			// dirs are removed by the caller's disk cleanup (--disk).
+			if n, nerr := conn.l.DomainSnapshotNum(dom, 0); nerr == nil && n > 0 {
+				if names, lerr := conn.l.DomainSnapshotListNames(dom, n, 0); lerr == nil {
+					for _, name := range names {
+						if snap, serr := conn.l.DomainSnapshotLookupByName(dom, name, 0); serr == nil {
+							_ = conn.l.DomainSnapshotDelete(snap, 0)
+						}
+					}
+				}
+			}
 			err = conn.undefineDomain(dom, env.DeleteDisk)
 		}
 		if err != nil {

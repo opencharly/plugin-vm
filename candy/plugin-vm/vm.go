@@ -291,33 +291,78 @@ func startVM(box, instance, domain string) error {
 		if err != nil {
 			return err
 		}
-		stateDir := filepath.Join(dir, name)
-		// Idempotent start (the libvirt backend's already_running semantic): a live
-		// QEMU process recorded in the pidfile is already running — re-executing the
-		// stored command would start a SECOND QEMU, which fails to lock the pidfile
-		// (EWOULDBLOCK) and corrupts the VM's state. The rebuild path (vmRebuild)
-		// relies on this: `vm create` already starts the domain, and the
-		// ensure-running guard must be a clean no-op for a running VM.
-		if vmshared.QemuAlive(stateDir) {
-			fmt.Fprintf(os.Stderr, "VM %s is already running\n", name)
-			return nil
-		}
-		cmdFile := filepath.Join(stateDir, "command")
-		data, err := os.ReadFile(cmdFile)
-		if err != nil {
-			return fmt.Errorf("VM %s not found — run 'charly vm create %s' first", name, box)
-		}
-		parts := strings.Fields(string(data))
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid stored command for VM %s", name)
-		}
-		cmd := exec.Command(parts[0], parts[1:]...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("qemu start failed: %w", err)
+		if err := startQemuFromStateDir(name, filepath.Join(dir, name)); err != nil {
+			return err
 		}
 		fmt.Fprintf(os.Stderr, "Started VM %s\n", name)
+	}
+	return nil
+}
+
+// startVmDomain starts the VM domain named `name` from whichever backend ACTUALLY holds it —
+// the start counterpart of stopVmDomain (the same vmHolder probe; R3: ONE authoritative-probe
+// abstraction, never a duplicate). The snapshot composite verbs (`snapshot revert-and-start`)
+// MUST NOT route through startVM: that resolves the backend via the project-config reverse
+// channel (hostConfigResolve), while the snapshot surface is deliberately config-free (registry
+// + direct libvirt/qemu) — a revert-and-start must work even when the kind:vm entity's project
+// config is gone. A missing VM is an error (nothing to start).
+func startVmDomain(name string) error {
+	backend, _, stateDir, err := vmHolder(name)
+	if err != nil {
+		return err
+	}
+	switch backend {
+	case "libvirt":
+		raw, ok := invokeVmPlugin("start", name, "")
+		if !ok {
+			return fmt.Errorf("VM %s: vm plugin unavailable (go-libvirt is out-of-process)", name)
+		}
+		if e := vmPluginOpError(raw); e != "" {
+			return fmt.Errorf("starting VM %s: %s", name, e)
+		}
+		if vmPluginOpFlag(raw, "already_running") {
+			fmt.Fprintf(os.Stderr, "VM %s is already running\n", name)
+		} else {
+			fmt.Fprintf(os.Stderr, "Started VM %s\n", name)
+		}
+		return nil
+	case "qemu":
+		if err := startQemuFromStateDir(name, stateDir); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Started VM %s\n", name)
+		return nil
+	}
+	return fmt.Errorf("no such VM %q: no libvirt domain and no qemu state — nothing to start", name)
+}
+
+// startQemuFromStateDir re-executes the stored qemu command recorded at `charly vm create`
+// time for a qemu-backend VM. Idempotent (the libvirt backend's already_running semantic): a
+// live QEMU process recorded in the pidfile is already running — re-executing the stored
+// command would start a SECOND QEMU, which fails to lock the pidfile (EWOULDBLOCK) and
+// corrupts the VM's state. The rebuild path (vmRebuild) relies on this: `vm create`
+// already starts the domain, and the ensure-running guard must be a clean no-op for a running
+// VM. Shared by startVM (the `charly vm start` handler) and startVmDomain (the composite
+// verbs) — ONE implementation (R3).
+func startQemuFromStateDir(name, stateDir string) error {
+	if vmshared.QemuAlive(stateDir) {
+		fmt.Fprintf(os.Stderr, "VM %s is already running\n", name)
+		return nil
+	}
+	cmdFile := filepath.Join(stateDir, "command")
+	data, err := os.ReadFile(cmdFile)
+	if err != nil {
+		return fmt.Errorf("VM %s not found — no stored qemu command in %s", name, stateDir)
+	}
+	parts := strings.Fields(string(data))
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid stored command for VM %s", name)
+	}
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("qemu start failed: %w", err)
 	}
 	return nil
 }
