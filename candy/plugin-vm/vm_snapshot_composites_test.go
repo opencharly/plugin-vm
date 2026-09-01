@@ -294,6 +294,21 @@ func TestVmSnapshotCmd_CompositeSubcommandsWired(t *testing.T) {
 	}
 }
 
+// TestSnapshotVmName_DomainOverride pins the --domain resolver: a non-empty
+// --domain (a check bed's per-deploy name) replaces the entity name for ALL
+// snapshot purposes (registry, disk paths, domain lookup); empty falls back to
+// the entity. FAILS if a refactor drops the override (the snapshot-anchored
+// check-run mode would then target the entity's own domain, which does not
+// exist for a bed — #33/P33).
+func TestSnapshotVmName_DomainOverride(t *testing.T) {
+	if got := snapshotVmName("omarchy-vm", "check-omarchy-desktop-vm"); got != "check-omarchy-desktop-vm" {
+		t.Fatalf("snapshotVmName(entity, domain) = %q, want the deploy name (the bed's domain identity)", got)
+	}
+	if got := snapshotVmName("omarchy-vm", ""); got != "omarchy-vm" {
+		t.Fatalf("snapshotVmName(entity, empty) = %q, want the entity (no --domain)", got)
+	}
+}
+
 // --- revert-and-start: real-libvirt offline-revert + restart -------------
 
 // TestRevertAndStart_OfflineRevertThenRestart drives the REAL composite
