@@ -169,12 +169,15 @@ func (s revertAndStartSteps) run(entity, snapName string) error {
 	if snapName == "" {
 		return fmt.Errorf("revert-and-start: snapshot name is required")
 	}
-	// Stop first (graceful; force=false preserves the "stopped, not depleted"
-	// semantic — the disk + definition survive for the revert + restart). An
+	// Stop first — FORCEFULLY. The revert requires the domain offline, and a
+	// graceful ACPI stop can hang on a desktop guest (the omarchy desktop's
+	// session blocks ACPI poweroff; the stop grace would expire with the domain
+	// still running). force=true destroys the domain but PRESERVES the disk +
+	// definition, which is exactly what the revert + restart need. An
 	// already-stopped domain is a clean no-op (stopped=true); an absent VM must
 	// FAIL, never false-succeed (the #77 stop / #69 destroy class).
 	name := vmName(entity, "")
-	stopped, err := s.stop(name, false)
+	stopped, err := s.stop(name, true)
 	if err != nil {
 		return err
 	}
