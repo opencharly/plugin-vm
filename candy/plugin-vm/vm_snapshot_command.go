@@ -11,11 +11,13 @@ import (
 
 // VmSnapshotCmd is the parent of `charly vm snapshot`.
 type VmSnapshotCmd struct {
-	Create  VmSnapshotCreateCmd  `cmd:"" help:"Create a snapshot of a VM (external by default; internal with --mode internal)"`
-	List    VmSnapshotListCmd    `cmd:"" help:"List snapshots for a VM"`
-	Delete  VmSnapshotDeleteCmd  `cmd:"" help:"Delete a snapshot (refuses while clones/ephemerals reference it)"`
-	Revert  VmSnapshotRevertCmd  `cmd:"" help:"Revert a VM to a snapshot"`
-	Promote VmSnapshotPromoteCmd `cmd:"" help:"Convert an internal snapshot to external mode (extracts via qemu-img convert)"`
+	Create           VmSnapshotCreateCmd           `cmd:"" help:"Create a snapshot of a VM (external by default; internal with --mode internal)"`
+	CreateConsistent VmSnapshotCreateConsistentCmd `cmd:"" name:"create-consistent" help:"Create a guest-consistent snapshot (guest-agent fsfreeze -> snapshot -> thaw; strict, no silent fallback)"`
+	List             VmSnapshotListCmd             `cmd:"" help:"List snapshots for a VM"`
+	Delete           VmSnapshotDeleteCmd           `cmd:"" help:"Delete a snapshot (refuses while clones/ephemerals reference it)"`
+	Revert           VmSnapshotRevertCmd           `cmd:"" help:"Revert a VM to a snapshot"`
+	RevertAndStart   VmSnapshotRevertAndStartCmd   `cmd:"" name:"revert-and-start" help:"Revert a VM to a snapshot and start it (stops the VM first: revert requires the domain offline)"`
+	Promote          VmSnapshotPromoteCmd          `cmd:"" help:"Convert an internal snapshot to external mode (extracts via qemu-img convert)"`
 }
 
 // VmSnapshotCreateCmd implements `charly vm snapshot create <vm> <name>`.
@@ -40,6 +42,32 @@ func (c *VmSnapshotCreateCmd) Run() error {
 		return err
 	}
 	fmt.Printf("created %s snapshot %q on vm %q\n", entry.Mode, entry.Name, c.Vm)
+	if entry.DiskPath != "" {
+		fmt.Printf("  disk: %s\n", entry.DiskPath)
+	}
+	return nil
+}
+
+// VmSnapshotCreateConsistentCmd implements `charly vm snapshot create-consistent <vm> <name>`.
+// The §5.3 composite verb: ONE step that produces a GUARANTEED-consistent snapshot —
+// guest-agent fsfreeze -> create (quiesced) -> thaw — with no silent fallback to a
+// non-quiesced snapshot (the distinction from `create --quiesce`, which retries
+// without the flag when the agent is unavailable). Orchestration lives in
+// vm_snapshot_composites.go (createConsistentSnapshot).
+type VmSnapshotCreateConsistentCmd struct {
+	Vm          string `arg:"" help:"VM name (kind:vm entity)"`
+	Name        string `arg:"" help:"Snapshot name"`
+	Mode        string `name:"mode" enum:"external,internal" default:"external" help:"Snapshot mode: external (clone-friendly, separate file) or internal (disk-efficient, embedded)"`
+	Description string `name:"description" help:"Human-facing description of the snapshot"`
+}
+
+// Run executes `charly vm snapshot create-consistent`.
+func (c *VmSnapshotCreateConsistentCmd) Run() error {
+	entry, err := createConsistentSnapshot(consistentCreateOpts(c.Vm, c.Name, c.Mode, c.Description))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("created consistent %s snapshot %q on vm %q\n", entry.Mode, entry.Name, c.Vm)
 	if entry.DiskPath != "" {
 		fmt.Printf("  disk: %s\n", entry.DiskPath)
 	}
@@ -106,6 +134,25 @@ func (c *VmSnapshotRevertCmd) Run() error {
 		return err
 	}
 	fmt.Printf("reverted vm %q to snapshot %q\n", c.Vm, c.Name)
+	return nil
+}
+
+// VmSnapshotRevertAndStartCmd implements `charly vm snapshot revert-and-start <vm> <name>`.
+// The §5.3 composite verb: encapsulates the offline-domain revert semantics —
+// stop the VM if running -> revert the snapshot -> start the VM. The stop is
+// REQUIRED for the revert to be able to run at all (qemu-img refuses to mutate a
+// live qcow2; libvirt's external revert also needs the domain offline).
+// Orchestration lives in vm_snapshot_composites.go (revertAndStartVm).
+type VmSnapshotRevertAndStartCmd struct {
+	Vm   string `arg:"" help:"VM name (kind:vm entity)"`
+	Name string `arg:"" help:"Snapshot name"`
+}
+
+func (c *VmSnapshotRevertAndStartCmd) Run() error {
+	if err := revertAndStartVm(c.Vm, c.Name); err != nil {
+		return err
+	}
+	fmt.Printf("reverted vm %q to snapshot %q and started it\n", c.Vm, c.Name)
 	return nil
 }
 
