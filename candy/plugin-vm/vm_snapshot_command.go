@@ -56,9 +56,9 @@ func (c *VmSnapshotCreateCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("created %s snapshot %q on vm %q", entry.Mode, entry.Name, c.Vm)
+	fmt.Printf("created %s snapshot %q on vm %q\n", entry.Mode, entry.Name, c.Vm)
 	if entry.DiskPath != "" {
-		fmt.Printf("  disk: %s", entry.DiskPath)
+		fmt.Printf("  disk: %s\n", entry.DiskPath)
 	}
 	return nil
 }
@@ -84,9 +84,9 @@ func (c *VmSnapshotCreateConsistentCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("created consistent %s snapshot %q on vm %q", entry.Mode, entry.Name, c.Vm)
+	fmt.Printf("created consistent %s snapshot %q on vm %q\n", entry.Mode, entry.Name, c.Vm)
 	if entry.DiskPath != "" {
-		fmt.Printf("  disk: %s", entry.DiskPath)
+		fmt.Printf("  disk: %s\n", entry.DiskPath)
 	}
 	return nil
 }
@@ -108,17 +108,17 @@ func (c *VmSnapshotListCmd) Run() error {
 		return writeJSON(os.Stdout, entries)
 	}
 	if len(entries) == 0 {
-		fmt.Printf("vm %q: no snapshots", c.Vm)
+		fmt.Printf("vm %q: no snapshots\n", c.Vm)
 		return nil
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME	MODE	CREATED	REFCOUNT	DESCRIPTION")
+	_, _ = fmt.Fprintln(tw, "NAME\tMODE\tCREATED\tREFCOUNT\tDESCRIPTION")
 	for _, e := range entries {
 		desc := e.Description
 		if len(desc) > 60 {
 			desc = desc[:57] + "..."
 		}
-		_, _ = fmt.Fprintf(tw, "%s	%s	%s	%d	%s", e.Name, e.Mode, e.Created, e.Refcount, desc)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", e.Name, e.Mode, e.Created, e.Refcount, desc)
 	}
 	return tw.Flush()
 }
@@ -140,7 +140,7 @@ func (c *VmSnapshotDeleteCmd) Run() error {
 	}); err != nil {
 		return err
 	}
-	fmt.Printf("deleted snapshot %q on vm %q", c.Name, c.Vm)
+	fmt.Printf("deleted snapshot %q on vm %q\n", c.Name, c.Vm)
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (c *VmSnapshotRevertCmd) Run() error {
 	if err := RevertSnapshot(vmName, c.Name); err != nil {
 		return err
 	}
-	fmt.Printf("reverted vm %q to snapshot %q", c.Vm, c.Name)
+	fmt.Printf("reverted vm %q to snapshot %q\n", c.Vm, c.Name)
 	return nil
 }
 
@@ -177,7 +177,7 @@ func (c *VmSnapshotRevertAndStartCmd) Run() error {
 	if err := revertAndStartVm(vmName, c.Name); err != nil {
 		return err
 	}
-	fmt.Printf("reverted vm %q to snapshot %q and started it", c.Vm, c.Name)
+	fmt.Printf("reverted vm %q to snapshot %q and started it\n", c.Vm, c.Name)
 	return nil
 }
 
@@ -194,9 +194,9 @@ func (c *VmSnapshotPromoteCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("promoted snapshot %q on vm %q (now mode=external)", c.Name, c.Vm)
+	fmt.Printf("promoted snapshot %q on vm %q (now mode=external)\n", c.Name, c.Vm)
 	if entry.DiskPath != "" {
-		fmt.Printf("  disk: %s", entry.DiskPath)
+		fmt.Printf("  disk: %s\n", entry.DiskPath)
 	}
 	return nil
 }
