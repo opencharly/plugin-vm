@@ -46,14 +46,14 @@ func TestCreateConsistent_ValidatesArgs(t *testing.T) {
 	}
 }
 
-// TestCreateConsistent_StrictFsfreezeOnRunningDomain proves the STRICT quiesce
+// TestCreateConsistent_StrictAgentOnRunningDomain proves the STRICT quiesce
 // precondition on a real running domain WITHOUT a guest agent: the composite
-// must FAIL with the fsfreeze error — never silently fall back to a
+// must FAIL with the agent-unreachable error — never silently fall back to a
 // non-quiesced snapshot (the `create --quiesce` fallback path would SUCCEED
-// here with a stderr note; create-consistent must not). FAILS if the fsfreeze
-// precondition is removed.
+// here with a stderr note; create-consistent must not). FAILS if the strict
+// agent precondition is removed.
 // Gated behind -short (needs qemu:///session + /dev/kvm).
-func TestCreateConsistent_StrictFsfreezeOnRunningDomain(t *testing.T) {
+func TestCreateConsistent_StrictAgentOnRunningDomain(t *testing.T) {
 	if testing.Short() {
 		t.Skip("creates a real libvirt domain (needs qemu:///session + /dev/kvm)")
 	}
@@ -94,8 +94,8 @@ func TestCreateConsistent_StrictFsfreezeOnRunningDomain(t *testing.T) {
 	}
 
 	_, err = createConsistentSnapshot(SnapshotCreateOpts{VmName: entity, SnapName: "s1", Mode: "external"})
-	if err == nil || !strings.Contains(err.Error(), "guest-agent fsfreeze failed") {
-		t.Fatalf("create-consistent on a running domain WITHOUT a guest agent must FAIL the strict fsfreeze precondition (never silently fall back to a non-quiesced snapshot), got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "qemu-guest-agent unreachable") {
+		t.Fatalf("create-consistent on a running domain WITHOUT a guest agent must FAIL the strict agent precondition (never silently fall back to a non-quiesced snapshot), got: %v", err)
 	}
 }
 

@@ -37,18 +37,22 @@ func consistentCreateOpts(vm, name, mode, desc string) SnapshotCreateOpts {
 	return opts
 }
 
-// createConsistentSnapshot implements the body of create-consistent: ONE step —
-// guest-agent fsfreeze -> create snapshot (quiesced) -> thaw. The fsfreeze is the
-// STRICT precondition that separates this verb from `create --quiesce`: if the
-// guest agent is unreachable the command FAILS, it never silently falls back to
-// a non-quiesced snapshot (create --quiesce retries without the flag; see
-// vm_snapshot_libvirt.go createExternalSnapshot). The thaw is unconditional
-// (deferred) so a mid-flight failure can never leave the guest filesystems frozen.
+// createConsistentSnapshot implements the body of create-consistent: ONE step
+// that produces a GUARANTEED-consistent snapshot. The strictness that separates
+// this verb from `create --quiesce`: the guest agent must be reachable AND
+// libvirt's quiesce flag must succeed — the command FAILS, it never silently
+// falls back to a non-quiesced snapshot (create --quiesce retries without the
+// flag; see vm_snapshot_libvirt.go createExternalSnapshot). libvirt's quiesce
+// flag freezes + snapshots + thaws ATOMICALLY, so no manual freeze/thaw is
+// needed and a mid-flight failure cannot leave the guest filesystems frozen.
 //
 // Mode-dependent semantics:
-//   - external mode, domain RUNNING: fsfreeze (strict) -> CreateSnapshot with
-//     Quiesce=true (libvirt re-freeze is a no-op, snapshot, thaw; the registry
-//     records Quiesced=true) -> thaw (deferred, surfaced on failure).
+//   - external mode, domain RUNNING: agent Ping (strict) -> CreateSnapshot with
+//     Quiesce=true under strictQuiesce (libvirt freezes, snapshots, thaws; the
+//     registry records Quiesced=true). The composite must NOT pre-freeze: a
+//     second freeze on an already-frozen filesystem is REJECTED by
+//     qemu-guest-agent ("command has been disabled"), which would trip the
+//     fallback and silently produce a non-quiesced snapshot.
 //   - external mode, domain NOT running (or absent): no guest agent to talk to —
 //     a stopped VM is inherently consistent, so the snapshot is created plain
 //     (Quiesce=false; libvirt's quiesce flag would fail against a dead agent).
@@ -91,25 +95,21 @@ func createConsistentSnapshot(opts SnapshotCreateOpts) (entry *SnapshotEntry, re
 	}
 
 	if mode == "external" && domFound && domRunning {
-		// Strict quiesce: guest-agent fsfreeze is the precondition. A stopped VM
-		// skips this branch entirely (inherently consistent, no agent to talk to).
+		// Strict quiesce: the guest agent must be reachable, and libvirt's
+		// quiesce flag must SUCCEED (strictQuiesce disables createExternalSnapshot's
+		// best-effort fallback). libvirt's quiesce flag freezes + snapshots +
+		// thaws ATOMICALLY — the composite must NOT pre-freeze itself: a second
+		// freeze on an already-frozen filesystem is REJECTED by qemu-guest-agent
+		// ("command has been disabled"), which would trip the fallback and silently
+		// produce a non-quiesced snapshot while the registry records Quiesced=true.
+		// A stopped VM skips this branch entirely (inherently consistent, no agent
+		// to talk to).
 		agent := NewGuestAgent(conn.l, dom, 10*time.Second)
-		if _, err := agent.FsFreeze(); err != nil {
-			return nil, fmt.Errorf("create-consistent: guest-agent fsfreeze failed: %w (create-consistent REQUIRES qemu-guest-agent in the guest; use 'charly vm snapshot create --quiesce' for best-effort quiesce, or stop the VM for an inherently consistent snapshot)", err)
+		if err := agent.Ping(); err != nil {
+			return nil, fmt.Errorf("create-consistent: qemu-guest-agent unreachable: %w (create-consistent REQUIRES qemu-guest-agent in the guest; use 'charly vm snapshot create --quiesce' for best-effort quiesce, or stop the VM for an inherently consistent snapshot)", err)
 		}
-		// Thaw is unconditional: the guest filesystems must never be left frozen,
-		// even when the snapshot creation itself fails mid-flight. On thaw failure
-		// the command errors (a frozen guest FS is a real problem) while keeping
-		// the create error when both failed.
-		defer func() {
-			if _, terr := agent.FsThaw(); terr != nil {
-				if retErr != nil {
-					retErr = fmt.Errorf("%v; additionally the post-snapshot fsfreeze-thaw failed: %w", retErr, terr)
-				} else {
-					retErr = fmt.Errorf("create-consistent: the snapshot was created but the post-snapshot fsfreeze-thaw failed (guest filesystems may still be frozen): %w", terr)
-				}
-			}
-		}()
+		strictQuiesce.Store(true)
+		defer strictQuiesce.Store(false)
 		var err error
 		entry, err = CreateSnapshot(opts) // opts.Quiesce is true here
 		if err != nil {
