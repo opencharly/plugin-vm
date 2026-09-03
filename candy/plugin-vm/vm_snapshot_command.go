@@ -13,6 +13,7 @@ import (
 type VmSnapshotCmd struct {
 	Create           VmSnapshotCreateCmd           `cmd:"" help:"Create a snapshot of a VM (external by default; internal with --mode internal)"`
 	CreateConsistent VmSnapshotCreateConsistentCmd `cmd:"" name:"create-consistent" help:"Create a guest-consistent snapshot (guest-agent fsfreeze -> snapshot -> thaw; strict, no silent fallback)"`
+	CaptureDeclared  VmSnapshotCaptureDeclaredCmd  `cmd:"" name:"capture-declared" help:"Capture every snapshot declared in the entity's snapshot: block (idempotent; create-consistent, external by default)"`
 	List             VmSnapshotListCmd             `cmd:"" help:"List snapshots for a VM"`
 	Delete           VmSnapshotDeleteCmd           `cmd:"" help:"Delete a snapshot (refuses while clones/ephemerals reference it)"`
 	Revert           VmSnapshotRevertCmd           `cmd:"" help:"Revert a VM to a snapshot"`
@@ -87,6 +88,58 @@ func (c *VmSnapshotCreateConsistentCmd) Run() error {
 	fmt.Printf("created consistent %s snapshot %q on vm %q\n", entry.Mode, entry.Name, c.Vm)
 	if entry.DiskPath != "" {
 		fmt.Printf("  disk: %s\n", entry.DiskPath)
+	}
+	return nil
+}
+
+// VmSnapshotCaptureDeclaredCmd implements `charly vm snapshot capture-declared <vm>`.
+//
+// The declarative twin of the check-bed `snapshot:` policy: the kind:vm ENTITY
+// declares named snapshots in its `snapshot:` block, and this verb captures each
+// one (create-consistent, external by default) against the resolved domain —
+// idempotently, so a re-run keeps the existing baseline. The captured snapshots
+// are then selectable as `from_snapshot` by any clone (`source.kind: clone`),
+// which is what makes the entity block the single declaration point for
+// "this VM, once provisioned, is a base for other VMs".
+type VmSnapshotCaptureDeclaredCmd struct {
+	Vm     string `arg:"" help:"VM name (kind:vm entity)"`
+	Domain string `name:"domain" help:"Target a check bed's per-deploy domain (charly-<deploy>) instead of the entity's own domain"`
+}
+
+// Run executes `charly vm snapshot capture-declared`.
+func (c *VmSnapshotCaptureDeclaredCmd) Run() error {
+	vmName := snapshotVmName(c.Vm, c.Domain)
+
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	vmSpec, err := resolveVmBuildEntity(cmdCtx, cmdExec, dir, c.Vm)
+	if err != nil {
+		return err
+	}
+	if vmSpec == nil || len(vmSpec.Snapshots) == 0 {
+		fmt.Printf("vm %q: no snapshot: block declared — nothing to capture\n", c.Vm)
+		return nil
+	}
+
+	for _, snap := range vmSpec.Snapshots {
+		if _, lerr := LookupSnapshot(vmName, snap.Name); lerr == nil {
+			fmt.Printf("note: snapshot %q already captured on %s — keeping the existing baseline\n", snap.Name, vmName)
+			continue
+		}
+		mode := snap.Mode
+		if mode == "" {
+			mode = "external"
+		}
+		entry, cerr := createConsistentSnapshot(consistentCreateOpts(vmName, snap.Name, mode, snap.Description))
+		if cerr != nil {
+			return fmt.Errorf("capturing declared snapshot %q on %s: %w", snap.Name, vmName, cerr)
+		}
+		fmt.Printf("captured declared snapshot %q on vm %q (mode=%s)\n", entry.Name, c.Vm, entry.Mode)
+		if entry.DiskPath != "" {
+			fmt.Printf("  disk: %s\n", entry.DiskPath)
+		}
 	}
 	return nil
 }
