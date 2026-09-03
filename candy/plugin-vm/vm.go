@@ -20,6 +20,7 @@ import (
 
 // VmCmd groups VM management subcommands.
 type VmCmd struct {
+	Bake       VmBakeCmd       `cmd:"" help:"Bake a layered VM box: materialize a clone base, boot it, apply layers in-guest, freeze a consistent snapshot, and emit the box image"`
 	Build      VmBuildCmd      `cmd:"" help:"Build QCOW2/RAW disk image from bootc container"`
 	Clone      VmCloneCmd      `cmd:"" help:"Clone a new VM from another VM's snapshot (writes a kind:vm declaration)"`
 	Console    VmConsoleCmd    `cmd:"" help:"Attach to VM serial console"`
