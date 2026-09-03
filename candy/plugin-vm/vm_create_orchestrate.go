@@ -99,6 +99,15 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		if spec.Source.Kind == "cloud_image" && spec.CloudInit != nil {
 			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
 		}
+		// A clone source needs its per-domain seed for the SAME reason: fresh
+		// instance-id + the DOMAIN's ssh key (the build's seed carries the ENTITY's
+		// key; two beds must never share instance-ids/keys). Without this the cloned
+		// guest boots with NO cloud-init datasource — no network-config re-run, no
+		// key injection — and the deploy never reaches sshd. Caught by the
+		// check-vm-clone bed (the clone domain had no CD-ROM attached).
+		if spec.Source.Kind == "clone" {
+			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
+		}
 		// An iso source needs its answers volume per-domain for the SAME reason: the
 		// build's seed carries the ENTITY's public key, and a deploy's guest is reachable
 		// only with the DOMAIN's. Without this the volume was omitted from the domain
@@ -119,7 +128,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// create` without forcing an explicit `charly vm build`. The qcow2 disk is
 	// left alone — only the seed ISO is cheap to rebuild. On the deploy path this
 	// renders the per-domain seed (with the per-domain ssh key) from scratch.
-	if spec.Source.Kind == "cloud_image" && seedISOAbs != "" {
+	if (spec.Source.Kind == "cloud_image" || spec.Source.Kind == "clone") && seedISOAbs != "" {
 		// existingState (the prior instance-id) comes from the config-resolve seam's VmState.
 		if err := RegenerateSeedISO(spec, seedISOAbs, vmStateDir, vmState); err != nil {
 			return fmt.Errorf("regenerating seed ISO: %w", err)
