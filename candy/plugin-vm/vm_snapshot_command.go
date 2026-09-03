@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
+
+	"github.com/opencharly/spec/spec"
 )
 
 // vm_snapshot_cmd.go — Kong subcommand wiring for `charly vm snapshot {…}`.
@@ -123,11 +125,10 @@ func (c *VmSnapshotCaptureDeclaredCmd) Run() error {
 		return nil
 	}
 
-	for _, snap := range vmSpec.Snapshots {
-		if _, lerr := LookupSnapshot(vmName, snap.Name); lerr == nil {
-			fmt.Printf("note: snapshot %q already captured on %s — keeping the existing baseline\n", snap.Name, vmName)
-			continue
-		}
+	for _, snap := range declaredSnapshotsToCapture(vmSpec.Snapshots, func(name string) error {
+		_, lerr := LookupSnapshot(vmName, name)
+		return lerr
+	}) {
 		mode := snap.Mode
 		if mode == "" {
 			mode = "external"
@@ -142,6 +143,21 @@ func (c *VmSnapshotCaptureDeclaredCmd) Run() error {
 		}
 	}
 	return nil
+}
+
+// declaredSnapshotsToCapture filters the entity's declared snapshot: block down
+// to the snapshots NOT yet present in the registry — the idempotent-capture
+// decision. A declared snapshot that already exists is skipped (the existing
+// baseline is kept), so a re-run of capture-declared is a no-op.
+func declaredSnapshotsToCapture(declared []spec.VmSnapshot, lookup func(name string) error) []spec.VmSnapshot {
+	var todo []spec.VmSnapshot
+	for _, snap := range declared {
+		if lookup(snap.Name) == nil {
+			continue // already captured — keep the existing baseline
+		}
+		todo = append(todo, snap)
+	}
+	return todo
 }
 
 // VmSnapshotListCmd implements `charly vm snapshot list <vm>`.

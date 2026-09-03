@@ -1,9 +1,12 @@
 package vm
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/opencharly/spec/spec"
 )
 
 // vm_clone_test.go — the clone build path (source.kind == "clone").
@@ -77,3 +80,40 @@ func TestKnownVmSourceKinds_IncludesClone(t *testing.T) {
 		t.Fatalf("knownVmSourceKinds must include %q so `charly vm build` dispatches clone entities; got %v", "clone", knownVmSourceKinds)
 	}
 }
+
+// declaredSnapshotsToCapture is the idempotent-capture decision behind
+// `charly vm snapshot capture-declared`: a declared snapshot already present
+// in the registry is skipped (the existing baseline is kept), so a re-run is a
+// no-op. This is the pure logic the command's registry lookup feeds.
+func TestDeclaredSnapshotsToCapture(t *testing.T) {
+	declared := []spec.VmSnapshot{
+		{Name: "golden"},
+		{Name: "baseline"},
+		{Name: "fresh"},
+	}
+	existing := map[string]bool{"golden": true, "baseline": true}
+	lookup := func(name string) error {
+		if existing[name] {
+			return nil
+		}
+		return fmt.Errorf("not found")
+	}
+
+	todo := declaredSnapshotsToCapture(declared, lookup)
+	if len(todo) != 1 || todo[0].Name != "fresh" {
+		t.Fatalf("only the not-yet-captured snapshot should be returned; got %+v", todo)
+	}
+
+	// All captured → nothing to do (idempotent re-run).
+	all := declaredSnapshotsToCapture(declared, func(string) error { return nil })
+	if len(all) != 0 {
+		t.Fatalf("a re-run with every snapshot captured must be a no-op; got %+v", all)
+	}
+
+	// None captured → everything is todo.
+	none := declaredSnapshotsToCapture(declared, func(string) error { return fmt.Errorf("missing") })
+	if len(none) != len(declared) {
+		t.Fatalf("with no snapshots captured, every declared snapshot must be todo; got %+v", none)
+	}
+}
+
