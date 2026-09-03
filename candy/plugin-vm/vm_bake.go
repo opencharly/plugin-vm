@@ -85,14 +85,19 @@ func (c *VmBakeCmd) Run() error {
 	// disk's guest may not auto-start the agent service, and the re-materialized
 	// clone disk wipes any prior in-guest enable. SSH in (the create path
 	// published the managed alias) and enable it, then let it connect.
-	if err := enableGuestAgent(c.Box, 8*time.Minute); err != nil {
+	// The bound mirrors the deploy path's WaitForSSH for a VM cold first boot
+	// (kit.WaitForSSH's default ~10-minute window) — not a magic value: the
+	// clone's first boot runs cloud-init provisioning before sshd listens.
+	if err := enableGuestAgent(c.Box, 10*time.Minute); err != nil {
 		return fmt.Errorf("vm bake: enabling guest agent: %w", err)
 	}
 
 	// Phase 3.5 — wait for the guest agent to CONNECT before the strict
 	// snapshot freeze (createConsistentSnapshot REQUIRES qemu-guest-agent
-	// reachable; the domain was just booted so the agent needs time to come up).
-	if err := waitForAgentConnect(c.Box, 3*time.Minute); err != nil {
+	// reachable). Once sshd is up and the service is enabled (phase 2.5), the
+	// agent connects within seconds — a short bound suffices; this is not a
+	// boot wait, that is phase 2.5's job.
+	if err := waitForAgentConnect(c.Box, 2*time.Minute); err != nil {
 		return fmt.Errorf("vm bake: guest agent not reachable before freeze: %w", err)
 	}
 
