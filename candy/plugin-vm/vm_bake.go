@@ -123,35 +123,51 @@ func (c *VmBakeCmd) Run() error {
 // enableGuestAgent SSHs into the freshly-booted guest and enables + starts
 // qemu-guest-agent (the strict snapshot freeze requires it reachable; the
 // baked disk's guest may ship the package without the service enabled at
-// boot). Polls until the ssh command succeeds or the timeout expires.
+// boot). Bounded poll — the guest may still be mid-cloud-init on the fresh
+// clone disk, so ssh retries until it answers or the timeout expires.
 //
 // Constructed as a SUBPROCESS (exec.Command), NOT via VmSshCmd: that command
 // leaf uses syscall.Exec (it replaces the process), which would terminate the
 // whole bake on the first cold-boot ssh reset.
 func enableGuestAgent(vmName string, timeout time.Duration) error {
 	alias := "charly-" + vmName
+	return bakePollUntil(func() error {
+		cmd := exec.Command("ssh", guestAgentEnableSshArgs(alias)...)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		return cmd.Run()
+	}, timeout, 5*time.Second)
+}
+
+// guestAgentEnableSshArgs is the exact ssh invocation that enables the guest
+// agent — extracted from enableGuestAgent so the command construction is
+// unit-testable (the subprocess itself needs a live guest).
+func guestAgentEnableSshArgs(alias string) []string {
+	return []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		alias,
+		"sudo", "systemctl", "enable", "--now", "qemu-guest-agent",
+	}
+}
+
+// pollUntil runs probe until it returns nil or the timeout expires. Bounded
+// polling is the bake's wait primitive — used both for the ssh agent-enable
+// and the libvirt agent-ping. Pure and testable with a fake probe.
+func bakePollUntil(probe func() error, timeout, interval time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		args := []string{
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			"-o", "LogLevel=ERROR",
-			alias,
-			"sudo", "systemctl", "enable", "--now", "qemu-guest-agent",
-		}
-		cmd := exec.Command("ssh", args...)
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
-		if err := cmd.Run(); err == nil {
+		if err := probe(); err == nil {
 			return nil
 		} else {
 			lastErr = err
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(interval)
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("timed out enabling qemu-guest-agent in %q", vmName)
+		lastErr = fmt.Errorf("timed out after %v", timeout)
 	}
 	return lastErr
 }
@@ -163,33 +179,19 @@ func enableGuestAgent(vmName string, timeout time.Duration) error {
 // same way).
 func waitForAgentConnect(vmName string, timeout time.Duration) error {
 	uri := readVmBackendURI()
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
+	return bakePollUntil(func() error {
 		conn, cerr := connectLibvirt(uri)
-		if cerr == nil {
-			dom, lerr := conn.lookupDomain("charly-" + vmName)
-			if lerr == nil {
-				agent := NewGuestAgent(conn.l, dom, 10*time.Second)
-				if perr := agent.Ping(); perr == nil {
-					_ = conn.Close()
-					return nil
-				} else {
-					lastErr = perr
-				}
-			} else {
-				lastErr = lerr
-			}
-			_ = conn.Close()
-		} else {
-			lastErr = cerr
+		if cerr != nil {
+			return cerr
 		}
-		time.Sleep(5 * time.Second)
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("timed out waiting for the guest agent")
-	}
-	return lastErr
+		defer conn.Close() //nolint:errcheck
+		dom, lerr := conn.lookupDomain("charly-" + vmName)
+		if lerr != nil {
+			return lerr
+		}
+		agent := NewGuestAgent(conn.l, dom, 10*time.Second)
+		return agent.Ping()
+	}, timeout, 5*time.Second)
 }
 
 // requireCloneSource is the bake's source-kind guard: a layered VM bakes a
