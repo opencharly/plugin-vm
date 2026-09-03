@@ -28,26 +28,26 @@ func TestSplitCsv(t *testing.T) {
 	}
 }
 
-// The bake requires a clone source (a layered VM bakes a clone base). The
-// Run-level guard mirrors BuildClone's own kind guard; the decision is a pure
-// comparison we test here so a dispatch bug cannot silently bake a wrong source.
+// The bake requires a clone source (a layered VM bakes a clone base). This
+// test drives the REAL guard (requireCloneSource — the function VmBakeCmd.Run
+// calls), so a removed or weakened guard fails the test.
 func TestBakeRequiresCloneKind(t *testing.T) {
-	for _, kind := range []string{"cloud_image", "bootc", "bootstrap", "iso", "imported"} {
+	nonClone := []string{"cloud_image", "bootc", "bootstrap", "iso", "imported"}
+	for _, kind := range nonClone {
 		s := &VmSpec{}
 		s.Source.Kind = kind
-		if s.Source.Kind == "clone" {
-			t.Fatal("test invariant: clone must not be in the non-clone list")
-		}
-		// The bake guard is: source.kind must be clone. Any other kind must be
-		// refused — assert the decision expression matches the guard.
-		if s.Source.Kind == "clone" {
-			t.Fatalf("%s must not pass the clone guard", kind)
+		if err := requireCloneSource(s, "bake-test"); err == nil {
+			t.Fatalf("requireCloneSource must refuse source.kind %q, got nil", kind)
 		}
 	}
-	// And clone passes the guard.
+	// A clone source passes.
 	s := &VmSpec{}
 	s.Source.Kind = "clone"
-	if s.Source.Kind != "clone" {
-		t.Fatal("clone must pass the clone guard")
+	if err := requireCloneSource(s, "bake-test"); err != nil {
+		t.Fatalf("requireCloneSource must accept source.kind clone, got %v", err)
+	}
+	// A nil spec is refused (the no-entity path).
+	if err := requireCloneSource(nil, "bake-test"); err == nil {
+		t.Fatal("requireCloneSource must refuse a nil spec")
 	}
 }

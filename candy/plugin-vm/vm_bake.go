@@ -2,9 +2,12 @@ package vm
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/opencharly/sdk/kit"
 	"github.com/opencharly/sdk/vmshared"
@@ -38,8 +41,8 @@ func (c *VmBakeCmd) Run() error {
 	if vmSpec == nil {
 		return noVmEntityErr(c.Box)
 	}
-	if vmSpec.Source.Kind != "clone" {
-		return fmt.Errorf("vm bake: source.kind must be clone (a layered VM bakes a clone base); entity %q has kind %q", c.Box, vmSpec.Source.Kind)
+	if err := requireCloneSource(vmSpec, c.Box); err != nil {
+		return err
 	}
 
 	rt, err := kit.ResolveRuntime()
@@ -78,6 +81,21 @@ func (c *VmBakeCmd) Run() error {
 		return nil
 	}
 
+	// Phase 2.5 — ensure qemu-guest-agent is ENABLED in the guest: the baked
+	// disk's guest may not auto-start the agent service, and the re-materialized
+	// clone disk wipes any prior in-guest enable. SSH in (the create path
+	// published the managed alias) and enable it, then let it connect.
+	if err := enableGuestAgent(c.Box, 8*time.Minute); err != nil {
+		return fmt.Errorf("vm bake: enabling guest agent: %w", err)
+	}
+
+	// Phase 3.5 — wait for the guest agent to CONNECT before the strict
+	// snapshot freeze (createConsistentSnapshot REQUIRES qemu-guest-agent
+	// reachable; the domain was just booted so the agent needs time to come up).
+	if err := waitForAgentConnect(c.Box, 3*time.Minute); err != nil {
+		return fmt.Errorf("vm bake: guest agent not reachable before freeze: %w", err)
+	}
+
 	// Phase 4 — freeze the baked state as a consistent snapshot.
 	fmt.Fprintf(os.Stderr, "bake %q: phase 4 — freezing the baked state (snapshot)\n", c.Box)
 	entry, err := createConsistentSnapshot(consistentCreateOpts(c.Box, "baked", "external", "layered bake of "+c.Box))
@@ -98,6 +116,92 @@ func (c *VmBakeCmd) Run() error {
 	stopCmd := VmStopCmd{Box: c.Box}
 	if err := stopCmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "vm bake: note: stopping the bake domain: %v\n", err)
+	}
+	return nil
+}
+
+// enableGuestAgent SSHs into the freshly-booted guest and enables + starts
+// qemu-guest-agent (the strict snapshot freeze requires it reachable; the
+// baked disk's guest may ship the package without the service enabled at
+// boot). Polls until the ssh command succeeds or the timeout expires.
+//
+// Constructed as a SUBPROCESS (exec.Command), NOT via VmSshCmd: that command
+// leaf uses syscall.Exec (it replaces the process), which would terminate the
+// whole bake on the first cold-boot ssh reset.
+func enableGuestAgent(vmName string, timeout time.Duration) error {
+	alias := "charly-" + vmName
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		args := []string{
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "LogLevel=ERROR",
+			alias,
+			"sudo", "systemctl", "enable", "--now", "qemu-guest-agent",
+		}
+		cmd := exec.Command("ssh", args...)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		if err := cmd.Run(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out enabling qemu-guest-agent in %q", vmName)
+	}
+	return lastErr
+}
+
+// waitForAgentConnect polls the guest agent's ping until it answers or the
+// timeout expires. The strict snapshot freeze requires a reachable
+// qemu-guest-agent; the domain was just booted by phase 2, so the agent needs
+// a bounded window to come up (the deploy path waits for SSH/cloud-init the
+// same way).
+func waitForAgentConnect(vmName string, timeout time.Duration) error {
+	uri := readVmBackendURI()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		conn, cerr := connectLibvirt(uri)
+		if cerr == nil {
+			dom, lerr := conn.lookupDomain("charly-" + vmName)
+			if lerr == nil {
+				agent := NewGuestAgent(conn.l, dom, 10*time.Second)
+				if perr := agent.Ping(); perr == nil {
+					_ = conn.Close()
+					return nil
+				} else {
+					lastErr = perr
+				}
+			} else {
+				lastErr = lerr
+			}
+			_ = conn.Close()
+		} else {
+			lastErr = cerr
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out waiting for the guest agent")
+	}
+	return lastErr
+}
+
+// requireCloneSource is the bake's source-kind guard: a layered VM bakes a
+// clone base, so any other source kind is a hard error. Extracted for the
+// unit test (the guard must fail a real non-clone spec, not a trivially-true
+// comparison).
+func requireCloneSource(vmSpec *VmSpec, vmName string) error {
+	if vmSpec == nil {
+		return noVmEntityErr(vmName)
+	}
+	if vmSpec.Source.Kind != "clone" {
+		return fmt.Errorf("vm bake: source.kind must be clone (a layered VM bakes a clone base); entity %q has kind %q", vmName, vmSpec.Source.Kind)
 	}
 	return nil
 }
