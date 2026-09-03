@@ -222,7 +222,15 @@ func RegenerateSeedISO(spec *VmSpec, seedPath, vmStateDir string, existingState 
 	// seed ISO. Cloud_image and bootstrap-VM both consume cloud-init via
 	// the NoCloud datasource; bootc-VM optionally does too when its image
 	// includes the cloud-init candy.
-	if spec.CloudInit == nil {
+	//
+	// A VM with ONLY an ssh: block also gets a seed: the renderer composes
+	// the user-data (users + the ssh pubkey) and a fresh instance-id from the
+	// ssh config. This is load-bearing for source.kind: clone — the clone's
+	// per-domain seed MUST carry the DOMAIN's key + a fresh instance-id or the
+	// cloned guest boots with no datasource (no network-config re-run, no key
+	// injection) and the deploy never reaches sshd. BuildClone already uses the
+	// CloudInit!=nil || SSH!=nil gate; the create path must not be stricter.
+	if spec.CloudInit == nil && spec.SSH == nil {
 		return nil
 	}
 
