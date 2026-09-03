@@ -41,14 +41,20 @@ func (c *VmBuildCmd) Run() error {
 	default:
 		return fmt.Errorf("unsupported disk type %q (valid: qcow2, raw)", c.Type)
 	}
-
-	if cmdExec == nil {
-		return fmt.Errorf("vm build: no host reverse channel (command not compiled-in?)")
-	}
-	reply, err := resolveVmBuild(cmdCtx, cmdExec, spec.VmBuildRequest{
+	return runVmBuildDrive(c.Box, spec.VmBuildRequest{
 		Box: c.Box, Size: c.Size, RootSize: c.RootSize, Tag: c.Tag,
 		Type: c.Type, Transport: c.Transport, Console: c.Console, Force: c.Force,
 	})
+}
+
+// runVmBuildDrive runs the standard `charly vm build` pipeline for one entity:
+// resolve → per-entity flock → per-source-kind dispatch. Shared by VmBuildCmd.Run
+// and the clone command's --build leg (R3 — one drive, no duplicated dispatch).
+func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
+	if cmdExec == nil {
+		return fmt.Errorf("vm build: no host reverse channel (command not compiled-in?)")
+	}
+	reply, err := resolveVmBuild(cmdCtx, cmdExec, req)
 	if err != nil {
 		return err
 	}
@@ -58,7 +64,7 @@ func (c *VmBuildCmd) Run() error {
 		return fmt.Errorf("decoding resolved vm spec: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Building VM %q (source.kind=%s)\n", c.Box, reply.SourceKind)
+	fmt.Fprintf(os.Stderr, "Building VM %q (source.kind=%s)\n", box, reply.SourceKind)
 
 	// Per-ENTITY build flock: serialize concurrent `vm build <entity>` so N beds sharing this
 	// entity's disk base never race on output/qcow2/<entity>/ (and a second build never
@@ -67,7 +73,7 @@ func (c *VmBuildCmd) Run() error {
 	// overlay-creates stay unserialized.
 	unlock, lockErr := kit.AcquireFileLock(filepath.Join(reply.OutputDir, ".build.lock"), true)
 	if lockErr != nil {
-		return fmt.Errorf("acquiring vm build lock for %s: %w", c.Box, lockErr)
+		return fmt.Errorf("acquiring vm build lock for %s: %w", box, lockErr)
 	}
 	defer func() { _ = unlock() }()
 
@@ -126,7 +132,18 @@ func (c *VmBuildCmd) Run() error {
 		fmt.Fprintf(os.Stderr, "Wrote %s (answers: %s)\n", res.SeedIsoPath, strings.Join(res.SeedFiles, ", "))
 		return nil
 
+	case "clone":
+		if err := BuildClone(box, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Wrote %s (clone of %s@%s)\n",
+			filepath.Join(vmDiskDir(box), "disk.qcow2"), vmSpec.Source.FromVm, vmSpec.Source.FromSnapshot)
+		if vmSpec.CloudInit != nil || vmSpec.SSH != nil {
+			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(vmDiskDir(box), "seed.iso"))
+		}
+		return nil
+
 	default:
-		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", c.Box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))
+		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))
 	}
 }

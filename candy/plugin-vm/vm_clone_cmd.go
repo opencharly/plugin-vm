@@ -2,8 +2,9 @@ package vm
 
 import (
 	"fmt"
-	"os"
 	"strings"
+
+	"github.com/opencharly/spec/spec"
 )
 
 // vm_clone_cmd.go — Kong subcommand wiring for `charly vm clone`. The
@@ -44,10 +45,12 @@ func (c *VmCloneCmd) Run() error {
 
 	if c.Build {
 		fmt.Printf("running charly vm build %s ...\n", c.Name)
-		// Build path is unchanged — the existing vm_build.go will dispatch
-		// on source.kind == "clone" once vm_clone.go::BuildClone is wired.
-		// V1 surfaces a clear hint when the build path isn't yet wired.
-		fmt.Fprintln(os.Stderr, "note: clone build path requires the source VM and snapshot to be live; rerun `charly vm build "+c.Name+"` after this clone declaration is in vm.yml")
+		// The clone declaration is now in charly.yml; drive the standard build
+		// pipeline so the entity builds exactly like any other (resolve → flock →
+		// source.kind dispatch → BuildClone). The source VM and its snapshot must
+		// be live on this host — the snapshot registry lives in the parent's state
+		// dir, and BuildClone refuses a missing snapshot.
+		return runVmBuildDrive(c.Name, spec.VmBuildRequest{Box: c.Name})
 	}
 	return nil
 }
