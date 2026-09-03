@@ -125,10 +125,14 @@ func (c *VmSnapshotCaptureDeclaredCmd) Run() error {
 		return nil
 	}
 
-	for _, snap := range declaredSnapshotsToCapture(vmSpec.Snapshots, func(name string) error {
+	todo, skipped := declaredSnapshotsToCapture(vmSpec.Snapshots, func(name string) error {
 		_, lerr := LookupSnapshot(vmName, name)
 		return lerr
-	}) {
+	})
+	for _, snap := range skipped {
+		fmt.Printf("note: snapshot %q already captured on %s — keeping the existing baseline\n", snap.Name, vmName)
+	}
+	for _, snap := range todo {
 		mode := snap.Mode
 		if mode == "" {
 			mode = "external"
@@ -145,19 +149,20 @@ func (c *VmSnapshotCaptureDeclaredCmd) Run() error {
 	return nil
 }
 
-// declaredSnapshotsToCapture filters the entity's declared snapshot: block down
-// to the snapshots NOT yet present in the registry — the idempotent-capture
-// decision. A declared snapshot that already exists is skipped (the existing
-// baseline is kept), so a re-run of capture-declared is a no-op.
-func declaredSnapshotsToCapture(declared []spec.VmSnapshot, lookup func(name string) error) []spec.VmSnapshot {
-	var todo []spec.VmSnapshot
+// declaredSnapshotsToCapture splits the entity's declared snapshot: block into
+// the snapshots NOT yet present in the registry (todo — to be captured) and the
+// ones already present (skipped — the existing baseline is kept). This is the
+// idempotent-capture decision: a re-run of capture-declared is a no-op, and the
+// caller surfaces the skipped names as notes.
+func declaredSnapshotsToCapture(declared []spec.VmSnapshot, lookup func(name string) error) (todo, skipped []spec.VmSnapshot) {
 	for _, snap := range declared {
 		if lookup(snap.Name) == nil {
-			continue // already captured — keep the existing baseline
+			skipped = append(skipped, snap)
+			continue
 		}
 		todo = append(todo, snap)
 	}
-	return todo
+	return todo, skipped
 }
 
 // VmSnapshotListCmd implements `charly vm snapshot list <vm>`.

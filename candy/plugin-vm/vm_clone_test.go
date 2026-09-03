@@ -99,21 +99,24 @@ func TestDeclaredSnapshotsToCapture(t *testing.T) {
 		return fmt.Errorf("not found")
 	}
 
-	todo := declaredSnapshotsToCapture(declared, lookup)
+	todo, skipped := declaredSnapshotsToCapture(declared, lookup)
 	if len(todo) != 1 || todo[0].Name != "fresh" {
-		t.Fatalf("only the not-yet-captured snapshot should be returned; got %+v", todo)
+		t.Fatalf("only the not-yet-captured snapshot should be todo; got %+v", todo)
+	}
+	if len(skipped) != 2 || skipped[0].Name != "golden" || skipped[1].Name != "baseline" {
+		t.Fatalf("the already-captured snapshots must be reported as skipped; got %+v", skipped)
 	}
 
-	// All captured → nothing to do (idempotent re-run).
-	all := declaredSnapshotsToCapture(declared, func(string) error { return nil })
-	if len(all) != 0 {
-		t.Fatalf("a re-run with every snapshot captured must be a no-op; got %+v", all)
+	// All captured → nothing to do (idempotent re-run), everything skipped.
+	all, allSkipped := declaredSnapshotsToCapture(declared, func(string) error { return nil })
+	if len(all) != 0 || len(allSkipped) != len(declared) {
+		t.Fatalf("a re-run with every snapshot captured must be a no-op; todo=%+v skipped=%+v", all, allSkipped)
 	}
 
-	// None captured → everything is todo.
-	none := declaredSnapshotsToCapture(declared, func(string) error { return fmt.Errorf("missing") })
-	if len(none) != len(declared) {
-		t.Fatalf("with no snapshots captured, every declared snapshot must be todo; got %+v", none)
+	// None captured → everything is todo, nothing skipped.
+	none, noneSkipped := declaredSnapshotsToCapture(declared, func(string) error { return fmt.Errorf("missing") })
+	if len(none) != len(declared) || len(noneSkipped) != 0 {
+		t.Fatalf("with no snapshots captured, every declared snapshot must be todo; todo=%+v skipped=%+v", none, noneSkipped)
 	}
 }
 
