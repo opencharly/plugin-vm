@@ -36,7 +36,7 @@ import (
 
 // knownVmSourceKinds lists the source.kind values `charly vm build` supports. Used by the
 // unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
-var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso"}
+var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso", "clone"}
 
 // noVmEntityErr is the shared "no kind:vm entity" error both entity-lookup failure paths raise.
 func noVmEntityErr(boxName string) error {
@@ -333,6 +333,15 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		// fetched from a URL, so no host-only lookup is involved.
 		if err := resolveVmBuildIsoDistro(ctx, ex, dir, vmSpec, &reply); err != nil {
 			return spec.VmBuildReply{}, err
+		}
+
+	case "clone":
+		// Nothing further to resolve — BuildClone reads the parent snapshot's registry
+		// from the parent VM's state dir and needs no host-only lookup (the cloud_image
+		// pass-through pattern). Validate the refs here so a malformed clone declaration
+		// fails at resolve time with a clear error instead of deep inside the build.
+		if vmSpec.Source.FromVm == "" || vmSpec.Source.FromSnapshot == "" {
+			return spec.VmBuildReply{}, fmt.Errorf("vm %q: source.from_vm and source.from_snapshot are required for clone VMs", boxName)
 		}
 
 	default:
