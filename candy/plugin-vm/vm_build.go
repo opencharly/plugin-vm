@@ -77,6 +77,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 	}
 	defer func() { _ = unlock() }()
 
+	var builtDisk string
 	switch reply.SourceKind {
 	case "cloud_image":
 		res, err := BuildCloudImage(&vmSpec, reply.OutputDir, reply.VmStateDir, reply.ExistingState, reply.Force)
@@ -86,7 +87,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		fmt.Fprintf(os.Stderr, "Wrote %s (base sha256=%s)\n", res.DiskPath, res.BaseImageSHA256)
 		fmt.Fprintf(os.Stderr, "Wrote %s\n", res.SeedIsoPath)
 		fmt.Fprintf(os.Stderr, "Instance-id: %s\n", res.InstanceID)
-		return nil
+		builtDisk = res.DiskPath
 
 	case "bootc":
 		res, err := BuildBootcVM(&vmSpec, reply.OutputDir, reply.VmStateDir, reply.ExistingState, reply.BootcImageRef)
@@ -97,7 +98,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		if res.SeedIsoPath != "" {
 			fmt.Fprintf(os.Stderr, "Wrote %s\n", res.SeedIsoPath)
 		}
-		return nil
+		builtDisk = res.DiskPath
 
 	case "bootstrap":
 		var distro DistroDef
@@ -116,7 +117,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		if res.SeedIsoPath != "" {
 			fmt.Fprintf(os.Stderr, "Wrote %s\n", res.SeedIsoPath)
 		}
-		return nil
+		builtDisk = res.DiskPath
 
 	case "iso":
 		var distro DistroDef
@@ -130,7 +131,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		fmt.Fprintf(os.Stderr, "Wrote %s (blank — the installer partitions it)\n", res.DiskPath)
 		fmt.Fprintf(os.Stderr, "Installer %s (sha256=%s)\n", res.InstallerIsoRef, res.InstallerSHA256)
 		fmt.Fprintf(os.Stderr, "Wrote %s (answers: %s)\n", res.SeedIsoPath, strings.Join(res.SeedFiles, ", "))
-		return nil
+		builtDisk = res.DiskPath
 
 	case "clone":
 		if err := BuildClone(box, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
@@ -141,9 +142,23 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		if vmSpec.CloudInit != nil || vmSpec.SSH != nil {
 			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(vmDiskDir(box), "seed.iso"))
 		}
-		return nil
+		builtDisk = filepath.Join(vmDiskDir(box), "disk.qcow2")
 
 	default:
 		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))
 	}
+
+	// Box emission (cutover plan task 3): after EVERY successful source-kind
+	// build, wrap the materialized disk + the entity's metadata into a VM box
+	// image on local engine storage, tagged with the current CalVer. BEST-EFFORT
+	// by contract — the disk build is the primary artifact and the box is its
+	// metadata wrapper — so a missing engine or a failed emit only warns and the
+	// build stays green (never fail the build on box emission).
+	vmName, _ := parseImageArg(box)
+	if ref, err := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: VM box emission skipped for %q (the disk build succeeded): %v\n", box, err)
+	} else {
+		fmt.Fprintf(os.Stderr, "Wrote VM box %s\n", ref)
+	}
+	return nil
 }
