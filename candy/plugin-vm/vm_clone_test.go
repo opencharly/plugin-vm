@@ -119,4 +119,3 @@ func TestDeclaredSnapshotsToCapture(t *testing.T) {
 		t.Fatalf("with no snapshots captured, every declared snapshot must be todo; todo=%+v skipped=%+v", none, noneSkipped)
 	}
 }
-
