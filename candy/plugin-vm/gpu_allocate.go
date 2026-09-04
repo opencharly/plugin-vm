@@ -97,6 +97,18 @@ func requiredGPUResource(cnode *FleetNode, resources map[string]*ResolvedResourc
 func autoAllocateExclusiveGPUs(spec *VmSpec, ovr *VmInstanceOverride, cnode *FleetNode, resources map[string]*ResolvedResource, domainName, backend string) (*VmInstanceOverride, error) {
 	tok, sel, ok := requiredGPUResource(cnode, resources)
 	if !ok {
+		// ROOT FIX (measured): when the CURRENT claimant needs no GPU, any stale
+		// hostdev persisted in the per-domain instance.yml must be DROPPED —
+		// returning ovr unchanged lets the caller ApplyToVmSpec inject the stale
+		// GPU <hostdev> into EVERY non-GPU VM on a passthrough host (measured:
+		// channel-keeper beds with no requires_exclusive got the card attached;
+		// the card then collides between concurrent VMs). A non-GPU claimant
+		// never gets the card.
+		if ovr != nil && ovr.Libvirt != nil && ovr.Libvirt.Devices != nil && len(ovr.Libvirt.Devices.Hostdevs) > 0 {
+			n := len(ovr.Libvirt.Devices.Hostdevs)
+			ovr.Libvirt.Devices.Hostdevs = nil
+			fmt.Printf("note: %s does not require a GPU; dropped stale <hostdev>s (was %d)\n", domainName, n)
+		}
 		return ovr, nil
 	}
 	vendor := normalizePCIVendor(sel.Vendor)

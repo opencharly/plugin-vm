@@ -133,6 +133,14 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 	return nil
 }
 
+// snapshotDeleteFlags returns the libvirt snapshot-delete flags: METADATA-ONLY.
+// charly owns the snapshot DISK lifecycle (the caller removes the per-snapshot
+// dir); a full delete (flags 0) unlinks the disk file and HANGS when it is the
+// running domain's in-use backing (measured: >2min vs libvirt --metadata, 14ms).
+func snapshotDeleteFlags() libvirt.DomainSnapshotDeleteFlags {
+	return libvirt.DomainSnapshotDeleteMetadataOnly
+}
+
 // deleteExternalSnapshot removes a libvirt snapshot record. Note: this
 // does NOT automatically delete the backing-chain qcow2 files; the
 // caller (vm_snapshot.go::DeleteSnapshot) removes the per-snapshot
@@ -166,7 +174,11 @@ func deleteExternalSnapshot(vmName string, entry *SnapshotEntry) error {
 		fmt.Fprintf(os.Stderr, "note: snapshot %q not found via libvirt (already deleted?): %v\n", libvirtName, err)
 		return nil
 	}
-	if err := conn.l.DomainSnapshotDelete(snap, 0); err != nil {
+	// METADATA-ONLY: charly owns the snapshot DISK lifecycle (the per-snapshot dir is
+	// removed by the caller), and a full delete (flags 0) tries to unlink the disk file
+	// which HANGS when it is the running domain's in-use backing (measured: >2min vs
+	// libvirt --metadata's 14ms on a keep_venue running domain).
+	if err := conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags()); err != nil {
 		return fmt.Errorf("DomainSnapshotDelete %q: %w", libvirtName, err)
 	}
 	return nil
