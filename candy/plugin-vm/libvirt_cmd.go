@@ -1020,7 +1020,7 @@ func (c *LibvirtSnapshotDeleteCmd) Run() error {
 		return err
 	}
 	// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings
-	if err := t.Conn.l.DomainSnapshotDelete(snap, libvirt.DomainSnapshotDeleteMetadataOnly); err != nil {
+	if err := t.Conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags()); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "deleted snapshot %s of %s\n", c.Name, t.DomName)

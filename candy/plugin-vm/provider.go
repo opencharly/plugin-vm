@@ -318,7 +318,7 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 					for _, name := range names {
 						if snap, serr := conn.l.DomainSnapshotLookupByName(dom, name, 0); serr == nil {
 							// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings
-							_ = conn.l.DomainSnapshotDelete(snap, libvirt.DomainSnapshotDeleteMetadataOnly)
+							_ = conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags())
 						}
 					}
 				}
