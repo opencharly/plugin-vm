@@ -105,8 +105,9 @@ func autoAllocateExclusiveGPUs(spec *VmSpec, ovr *VmInstanceOverride, cnode *Fle
 		// the card then collides between concurrent VMs). A non-GPU claimant
 		// never gets the card.
 		if ovr != nil && ovr.Libvirt != nil && ovr.Libvirt.Devices != nil && len(ovr.Libvirt.Devices.Hostdevs) > 0 {
+			n := len(ovr.Libvirt.Devices.Hostdevs)
 			ovr.Libvirt.Devices.Hostdevs = nil
-			fmt.Printf("note: %s does not require a GPU; dropped stale <hostdev>s (was %d)\n", domainName, len(ovr.Libvirt.Devices.Hostdevs))
+			fmt.Printf("note: %s does not require a GPU; dropped stale <hostdev>s (was %d)\n", domainName, n)
 		}
 		return ovr, nil
 	}
