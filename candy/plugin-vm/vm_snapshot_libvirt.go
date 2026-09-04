@@ -166,7 +166,11 @@ func deleteExternalSnapshot(vmName string, entry *SnapshotEntry) error {
 		fmt.Fprintf(os.Stderr, "note: snapshot %q not found via libvirt (already deleted?): %v\n", libvirtName, err)
 		return nil
 	}
-	if err := conn.l.DomainSnapshotDelete(snap, 0); err != nil {
+	// METADATA-ONLY: charly owns the snapshot DISK lifecycle (the per-snapshot dir is
+	// removed by the caller), and a full delete (flags 0) tries to unlink the disk file
+	// which HANGS when it is the running domain's in-use backing (measured: >2min vs
+	// libvirt --metadata's 14ms on a keep_venue running domain).
+	if err := conn.l.DomainSnapshotDelete(snap, libvirt.DomainSnapshotDeleteMetadataOnly); err != nil {
 		return fmt.Errorf("DomainSnapshotDelete %q: %w", libvirtName, err)
 	}
 	return nil
