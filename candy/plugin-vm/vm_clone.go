@@ -1,12 +1,16 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/opencharly/sdk/vmshared"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +30,52 @@ import (
 //   - writeVmCloneDeclaration — invoked by `charly vm clone` to persist a
 //     kind:vm entry into charly.yml. Pure config-file
 //     mutation; no disk operations.
+
+// snapshotBackingStale walks a snapshot's qcow2 backing chain and reports the
+// first backing file whose mtime is NEWER than the snapshot's capture time
+// (or "" when the chain is fresh). A snapshot whose backing base was rebuilt
+// after capture is stale: the guest filesystem (e.g. btrfs) inside the snapshot
+// references inodes in the OLD base data, so a clone boots into grub rescue
+// ("inode not found") instead of the guest. The check walks the FULL chain
+// (qemu-img info --backing-chain), because the staleness is transitive — the
+// snapshot's direct backing may be untouched while ITS backing (the leaf base)
+// was rebuilt. -U opens read-only so a snapshot in use by a running clone is
+// still inspectable. A qemu-img failure or a missing backing file is NOT
+// treated as stale (a broken chain is a different, louder error at overlay
+// create); only a genuinely newer backing file trips the guard.
+func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
+	if entry == nil || entry.DiskPath == "" || entry.Created == "" {
+		return "", nil // nothing to check
+	}
+	created, err := time.Parse(time.RFC3339, entry.Created)
+	if err != nil {
+		return "", fmt.Errorf("parsing snapshot created time %q: %w", entry.Created, err)
+	}
+	cmd := exec.Command("qemu-img", "info", "--backing-chain", "-U", "--output", "json", entry.DiskPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("qemu-img info --backing-chain %s: %w", entry.DiskPath, err)
+	}
+	var chain []struct {
+		Filename string `json:"filename"`
+	}
+	if err := json.Unmarshal(out, &chain); err != nil {
+		return "", fmt.Errorf("parsing qemu-img backing chain: %w", err)
+	}
+	for _, img := range chain {
+		if img.Filename == "" || img.Filename == entry.DiskPath {
+			continue // the snapshot's own disk is not a backing file
+		}
+		fi, err := os.Stat(img.Filename)
+		if err != nil {
+			continue // a missing backing file is a different error (overlay create will fail loudly)
+		}
+		if fi.ModTime().After(created) {
+			return img.Filename, nil
+		}
+	}
+	return "", nil
+}
 
 // BuildClone is the source.kind == "clone" build path.
 //
@@ -60,6 +110,20 @@ func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	}
 	if parentEntry.DiskPath == "" {
 		return fmt.Errorf("vm %q: parent snapshot %s@%s has no disk path", vmName, spec.Source.FromVm, spec.Source.FromSnapshot)
+	}
+
+	// STALE-SNAPSHOT GUARD (R1, the grub-rescue regression): a snapshot whose
+	// backing chain was rebuilt AFTER the snapshot was captured is stale — the
+	// guest filesystem (e.g. btrfs) inside the snapshot references inodes in
+	// the OLD base data, so a clone boots into grub rescue ("inode not found")
+	// instead of the guest. Detecting this at clone time turns that silent
+	// boot failure into a loud, actionable error naming the stale backing file
+	// and the refresh path (re-run the base bed that captured the snapshot).
+	if stale, serr := snapshotBackingStale(parentEntry); serr != nil {
+		return fmt.Errorf("vm %q: checking snapshot %s@%s freshness: %w", vmName, spec.Source.FromVm, spec.Source.FromSnapshot, serr)
+	} else if stale != "" {
+		return fmt.Errorf("vm %q: snapshot %s@%s is STALE: its backing disk %s was modified after the snapshot was captured (%s). The guest filesystem inside the snapshot references the OLD base data, so a clone would fail to boot. Re-run the base bed that captured the snapshot (e.g. check-vm-clone-base) to refresh it before cloning",
+			vmName, spec.Source.FromVm, spec.Source.FromSnapshot, stale, parentEntry.Created)
 	}
 
 	// Materialize the clone overlay using the existing primitive.
