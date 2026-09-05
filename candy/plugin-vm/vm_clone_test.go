@@ -2,10 +2,15 @@ package vm
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/opencharly/sdk/vmshared"
 	"github.com/opencharly/spec/spec"
 )
 
@@ -16,6 +21,70 @@ import (
 // snapshot's refcount, and regenerates the cloud-init seed ISO with a fresh
 // instance-id. These tests exercise the guards that keep a malformed clone
 // declaration from failing deep inside qemu-img.
+
+// makeSnapshotChain builds a real two-layer qcow2 chain (base + snapshot
+// overlay) in a temp dir and returns the snapshot entry pointing at the overlay.
+// The base's mtime is set to baseMtime; the snapshot's Created is set to
+// snapCreated — the two knobs the staleness guard compares.
+func makeSnapshotChain(t *testing.T, baseMtime, snapCreated time.Time) *vmshared.SnapshotEntry {
+	t.Helper()
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.qcow2")
+	snap := filepath.Join(dir, "snap.qcow2")
+	for _, p := range []string{base, snap} {
+		cmd := exec.Command("qemu-img", "create", "-f", "qcow2", p, "1G")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("qemu-img create %s: %v (%s)", p, err, out)
+		}
+	}
+	// Re-create the snapshot as an overlay on the base (a plain create has no
+	// backing; the guard walks the chain, so the overlay must reference it).
+	_ = os.Remove(snap)
+	cmd := exec.Command("qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", base, snap)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("qemu-img create overlay: %v (%s)", err, out)
+	}
+	if err := os.Chtimes(base, baseMtime, baseMtime); err != nil {
+		t.Fatalf("set base mtime: %v", err)
+	}
+	return &vmshared.SnapshotEntry{
+		Name:     "golden",
+		Mode:     "external",
+		DiskPath: snap,
+		Created:  snapCreated.Format(time.RFC3339),
+	}
+}
+
+// TestSnapshotBackingStale_DetectsRebuiltBase is the R1 regression gate for the
+// grub-rescue stall: a snapshot whose backing base was rebuilt AFTER capture is
+// stale and must be reported. The witness: base mtime AFTER the snapshot's
+// Created → the guard names the base; base mtime BEFORE the snapshot's Created
+// → the guard reports fresh ("").
+func TestSnapshotBackingStale_DetectsRebuiltBase(t *testing.T) {
+	now := time.Now()
+	// Stale: the base was rebuilt after the snapshot was captured.
+	stale := makeSnapshotChain(t, now.Add(-time.Minute), now.Add(-time.Hour))
+	got, err := snapshotBackingStale(stale)
+	if err != nil {
+		t.Fatalf("snapshotBackingStale: %v", err)
+	}
+	if got == "" {
+		t.Fatal("a snapshot whose backing base was rebuilt after capture must be reported stale")
+	}
+	if !strings.HasSuffix(got, "base.qcow2") {
+		t.Fatalf("the stale backing file must be named; got %q", got)
+	}
+
+	// Fresh: the base predates the snapshot.
+	fresh := makeSnapshotChain(t, now.Add(-time.Hour), now.Add(-time.Minute))
+	got, err = snapshotBackingStale(fresh)
+	if err != nil {
+		t.Fatalf("snapshotBackingStale (fresh): %v", err)
+	}
+	if got != "" {
+		t.Fatalf("a snapshot whose backing base predates capture must be fresh; got stale %q", got)
+	}
+}
 
 // cloneSpec builds a minimal clone VmSpec. The parent snapshot need not exist
 // for the guard tests below — they fail before any registry lookup.

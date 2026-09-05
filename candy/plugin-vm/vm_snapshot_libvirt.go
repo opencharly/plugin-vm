@@ -64,6 +64,18 @@ var strictQuiesce atomic.Bool
 // "frozen" disk (the one that existed before the snapshot) is what
 // clones use as backing.
 func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
+	// SHARED-SNAPSHOT DEFAULT (R1, the parallel-clone lock regression): an
+	// external snapshot is the clone source for every clone VM, and qemu opens
+	// a backing file with auto-read-only — which tries READ-WRITE first and
+	// takes an EXCLUSIVE lock, so two clones of the same golden conflict (the
+	// first holds the lock, the second fails "Failed to get shared write lock").
+	// Making the snapshot disk READ-ONLY on disk (0444) makes qemu fall back to
+	// a SHARED lock, so any number of clone VMs can share the golden in
+	// parallel. The base VM's already-open fd is unaffected (chmod does not
+	// change an open fd's mode); a re-capture chmods the file writable first.
+	if err := makeSnapshotWritable(outFile); err != nil {
+		return err
+	}
 	// Resolve current libvirt connection.
 	uri := readVmBackendURI()
 	conn, err := connectLibvirt(uri)
@@ -129,6 +141,33 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 			return nil
 		}
 		return fmt.Errorf("DomainSnapshotCreateXML: %w", err)
+	}
+	// Make the snapshot disk READ-ONLY (0444) so every clone VM opens it with a
+	// SHARED lock — the parallel-clone default (see the header comment). The
+	// base VM's already-open fd is unaffected; a re-capture chmods it writable
+	// first (above).
+	if err := makeSnapshotReadOnly(outFile); err != nil {
+		return err
+	}
+	return nil
+}
+
+// makeSnapshotWritable chmods a snapshot disk to 0644 so a re-capture can
+// overwrite it. Best-effort for a not-yet-existing file (first capture).
+func makeSnapshotWritable(path string) error {
+	if err := os.Chmod(path, 0o644); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("making snapshot %s writable for capture: %w", path, err)
+	}
+	return nil
+}
+
+// makeSnapshotReadOnly chmods a snapshot disk to 0444 — the SHARED-SNAPSHOT
+// default. qemu opens a read-only backing file with a SHARED lock, so any
+// number of clone VMs can share the golden in parallel (the parallel-clone
+// regression fix). The base VM's already-open fd is unaffected.
+func makeSnapshotReadOnly(path string) error {
+	if err := os.Chmod(path, 0o444); err != nil {
+		return fmt.Errorf("making snapshot %s read-only (shared-clone default): %w", path, err)
 	}
 	return nil
 }
