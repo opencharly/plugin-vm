@@ -22,6 +22,44 @@ import (
 // re-freezes an already-frozen filesystem as a no-op. FAILS if a future refactor
 // drops the flag from consistentCreateOpts (the snapshot would then be recorded
 // as non-quiesced and the "consistent" guarantee would be unverifiable).
+// TestMakeSnapshotSharedReadOnly is the R1 regression gate for the
+// parallel-clone lock regression: an external snapshot disk must be READ-ONLY
+// (0444) after capture so every clone VM opens it with a SHARED lock (qemu
+// auto-read-only would otherwise try read-write and take an EXCLUSIVE lock,
+// blocking parallel clones). The witness: makeSnapshotReadOnly sets 0444;
+// makeSnapshotWritable restores 0644 for a re-capture.
+func TestMakeSnapshotSharedReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "golden.qcow2")
+	if err := os.WriteFile(path, []byte("test"), 0o644); err != nil {
+		t.Fatalf("create golden: %v", err)
+	}
+	if err := makeSnapshotReadOnly(path); err != nil {
+		t.Fatalf("makeSnapshotReadOnly: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o444 {
+		t.Fatalf("snapshot disk must be read-only (0444) for shared clone locks; got %o", fi.Mode().Perm())
+	}
+	if err := makeSnapshotWritable(path); err != nil {
+		t.Fatalf("makeSnapshotWritable: %v", err)
+	}
+	fi, err = os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("re-capture must restore writable (0644); got %o", fi.Mode().Perm())
+	}
+	// A not-yet-existing file (first capture) is a no-op, not an error.
+	if err := makeSnapshotWritable(filepath.Join(dir, "missing.qcow2")); err != nil {
+		t.Fatalf("makeSnapshotWritable on a missing file must be a no-op: %v", err)
+	}
+}
+
 func TestCreateConsistent_QuiesceTrue(t *testing.T) {
 	opts := consistentCreateOpts("myvm", "snap1", "", "a consistent snapshot")
 	if !opts.Quiesce {
