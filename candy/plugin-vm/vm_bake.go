@@ -205,7 +205,6 @@ func waitForAgentConnect(vmName string, timeout time.Duration) error {
 	}, timeout, 5*time.Second)
 }
 
-
 // bakeRequiresSnapshot is the bake's guard: the base materializes as a clone of the
 // entity's OWN golden, so the snapshot name is required (the retired entity clone arm
 // used to carry it). Extracted for the unit test (the guard must fail a real empty
