@@ -140,9 +140,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		// the deploy's snapshot (req.FromSnapshot — resolveVmBuild set reply.SourceKind
 		// to "clone", the DRIVE, when the request carries from_snapshot). BuildClone
 		// requires source.kind == clone + FromVm + FromSnapshot; set them from the drive.
-		vmSpec.Source.Kind = "clone"
-		vmSpec.Source.FromVm = box
-		vmSpec.Source.FromSnapshot = req.FromSnapshot
+		applyCloneDriveSource(&vmSpec, box, req.FromSnapshot)
 		if err := BuildClone(box, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
 			return err
 		}
