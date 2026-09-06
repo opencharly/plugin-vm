@@ -36,8 +36,6 @@ import (
 
 // knownVmSourceKinds lists the source.kind values `charly vm build` supports. Used by the
 // unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
-// knownVmSourceKinds lists the source.kind values `charly vm build` supports. Used by the
-// unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
 // clone is NOT a source kind — it is the DEPLOY-DRIVEN drive (from: name:tag → from_snapshot);
 // the retired entity arm (source.kind: clone) errors loudly in the switch below.
 var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso"}

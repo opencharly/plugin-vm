@@ -209,14 +209,3 @@ func addStrPair(parent *yaml.Node, key, val string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: val},
 	)
 }
-
-func addBoolPair(parent *yaml.Node, key string, val bool) {
-	v := "false"
-	if val {
-		v = "true"
-	}
-	parent.Content = append(parent.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: v},
-	)
-}
