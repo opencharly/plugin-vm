@@ -69,14 +69,11 @@ func resolveVmBuildViaDeployFrom(ctx context.Context, ex *sdk.Executor, dir, box
 	if err != nil || !ok {
 		return nil, fmt.Errorf("loading charly.yml for the deploy-from hop: %w", err)
 	}
-	d, hit := uf.Fleet[boxName]
-	if !hit {
-		return nil, fmt.Errorf("vm %q: not a kind:vm entity nor a deploy (wanted the clone base)", boxName)
+	target, has := loaderkit.DeployTargetEntity(uf, boxName)
+	if !has || target == boxName {
+		return nil, fmt.Errorf("vm %q: not a kind:vm entity nor a deploy whose from: names one (wanted the clone base)", boxName)
 	}
-	if d.From == "" {
-		return nil, fmt.Errorf("vm %q: deploy %q has no from: to resolve the clone base entity from", boxName, boxName)
-	}
-	return resolveVmBuildEntity(ctx, ex, dir, d.From)
+	return resolveVmBuildEntity(ctx, ex, dir, target)
 }
 
 // noVmEntityErr is the shared "no kind:vm entity" error both entity-lookup failure paths raise.
