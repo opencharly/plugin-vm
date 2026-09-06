@@ -87,15 +87,9 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 	// Unified from: name:tag functional half (Cutover A addendum): a
 	// --from-snapshot <tag> build treats the entity as a CLONE of its own golden at
 	// the named snapshot (from_vm = the entity itself). The deploy's from: name:tag
-	// (tag = snapshot name) flows here. This is the deploy-level clone — the
-	// source.kind: clone ENTITY arm is retired (R5, hard error pointing at
-	// from: name:tag).
-	if req.FromSnapshot != "" {
-		vmSpec.Source.Kind = "clone"
-		vmSpec.Source.FromVm = box
-		vmSpec.Source.FromSnapshot = req.FromSnapshot
-		reply.SourceKind = "clone"
-	}
+	// (tag = snapshot name) flows here. The source.kind: clone ENTITY arm stays
+	// (never renamed) — this is the ADDITIVE deploy-level clone path.
+	applyFromSnapshotOverride(&vmSpec, &reply.SourceKind, box, req.FromSnapshot)
 
 	var builtDisk string
 	switch reply.SourceKind {
@@ -181,4 +175,18 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		fmt.Fprintf(os.Stderr, "Wrote VM box %s\n", ref)
 	}
 	return nil
+}
+
+// applyFromSnapshotOverride is the PURE from: name:tag functional half (Cutover A
+// addendum): a --from-snapshot <tag> build treats the entity as a CLONE of its own
+// golden at the named snapshot (from_vm = the entity itself). Split out so the
+// override is unit-testable without a live executor. No-op when fromSnapshot is empty.
+func applyFromSnapshotOverride(vmSpec *VmSpec, sourceKind *string, box, fromSnapshot string) {
+	if fromSnapshot == "" {
+		return
+	}
+	vmSpec.Source.Kind = "clone"
+	vmSpec.Source.FromVm = box
+	vmSpec.Source.FromSnapshot = fromSnapshot
+	*sourceKind = "clone"
 }
