@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/opencharly/sdk/vmshared"
@@ -179,81 +178,6 @@ func appendCloudInitClean(existing []string) []string {
 	return append(existing, cleanCmd)
 }
 
-// writeVmCloneDeclaration persists a kind:vm entry for a clone into
-// charly.yml, preserving comments + key order via the yaml.v3 Node
-// API.
-//
-// Schema v4 (2026-05) makes charly.yml the only canonical authoring
-// target. If charly.yml is missing, errors with a remediation hint
-// pointing at `charly box new project` / `charly migrate`.
-func writeVmCloneDeclaration(name, srcVm, srcSnap string, cloudInitClean bool) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	target := filepath.Join(cwd, UnifiedFileName)
-	if _, err := os.Stat(target); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("charly.yml not found in %s; run `charly box new project .` first", cwd)
-		}
-		return fmt.Errorf("stat charly.yml: %w", err)
-	}
-
-	data, err := os.ReadFile(target)
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", target, err)
-	}
-
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return fmt.Errorf("parsing %s: %w", target, err)
-	}
-
-	// Walk to the `vm:` mapping (creating it on demand). Append the new
-	// entry. Re-marshal preserving comments via the Node API.
-	if root.Kind == 0 {
-		// Empty file — synthesize a fresh document root.
-		root.Kind = yaml.DocumentNode
-		root.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
-	}
-	if len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
-		return fmt.Errorf("%s: top-level YAML is not a mapping (cannot append vm: entry)", target)
-	}
-	topMap := root.Content[0]
-
-	vmMap := findOrCreateMapEntry(topMap, "vm")
-	if alreadyHas(vmMap, name) {
-		return fmt.Errorf("%s: vm entry %q already exists; pick a different name or remove the existing entry first", target, name)
-	}
-
-	// Build the new entry as a YAML mapping node.
-	entry := buildCloneVmNode(srcVm, srcSnap, cloudInitClean)
-
-	// Append name → entry as a key/value pair.
-	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
-	vmMap.Content = append(vmMap.Content, keyNode, entry)
-
-	// Re-marshal with explicit 4-space indent matching the project's
-	// charly.yml canonical style. Default `yaml.Marshal` produces
-	// the right indent BUT also re-flows quoted strings and key
-	// ordering in ways that pollute the diff; we use the encoder API
-	// for stable output. Mirrors migrate_deploy_v3.go which uses
-	// SetIndent(4) for the same reason.
-	var buf strings.Builder
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(4)
-	if err := enc.Encode(&root); err != nil {
-		return fmt.Errorf("marshaling updated YAML: %w", err)
-	}
-	_ = enc.Close()
-	out := []byte(buf.String())
-	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, out, 0o644); err != nil {
-		return fmt.Errorf("writing %s: %w", tmp, err)
-	}
-	return os.Rename(tmp, target)
-}
-
 // findOrCreateMapEntry locates a top-level map key in a mapping node
 // and returns its value mapping. If absent, appends a fresh empty
 // mapping and returns it.
@@ -277,30 +201,6 @@ func alreadyHas(parent *yaml.Node, key string) bool {
 		}
 	}
 	return false
-}
-
-// buildCloneVmNode synthesizes a YAML mapping node for a kind:vm
-// clone entry: source: { kind: clone, from_vm, from_snapshot,
-// cloud_init_clean }.
-func buildCloneVmNode(srcVm, srcSnap string, cloudInitClean bool) *yaml.Node {
-	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-
-	// source: ...
-	sourceVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	addStrPair(sourceVal, "kind", "clone")
-	addStrPair(sourceVal, "from_vm", srcVm)
-	if srcSnap != "" {
-		addStrPair(sourceVal, "from_snapshot", srcSnap)
-	}
-	if cloudInitClean {
-		addBoolPair(sourceVal, "cloud_init_clean", true)
-	}
-
-	n.Content = append(n.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "source"},
-		sourceVal,
-	)
-	return n
 }
 
 func addStrPair(parent *yaml.Node, key, val string) {

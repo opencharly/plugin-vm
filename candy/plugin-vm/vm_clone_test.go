@@ -172,13 +172,17 @@ func TestBuildClone_RequiresFromSnapshot(t *testing.T) {
 	}
 }
 
-// The build dispatch enumerates its supported kinds in knownVmSourceKinds for
-// the unsupported-kind error message. A new source kind that forgets to add
-// itself here would be rejected by `charly vm build` with a confusing message
-// even though the engine exists — this guard keeps the enumeration honest.
-func TestKnownVmSourceKinds_IncludesClone(t *testing.T) {
-	if !slices.Contains(knownVmSourceKinds, "clone") {
-		t.Fatalf("knownVmSourceKinds must include %q so `charly vm build` dispatches clone entities; got %v", "clone", knownVmSourceKinds)
+// The build dispatch enumerates the SUPPORTED entity source kinds in knownVmSourceKinds
+// for the unsupported-kind error message. clone is NOT a source kind since the entity
+// arm retired (Cutover A addendum Phase 3): the clone is the DEPLOY-DRIVEN drive
+// (from: name:tag → from_snapshot). An entity with source.kind: clone now errors loudly
+// in the resolve switch (the retirement message), never dispatches.
+func TestKnownVmSourceKinds_ExcludesClone(t *testing.T) {
+	if slices.Contains(knownVmSourceKinds, "clone") {
+		t.Fatalf("knownVmSourceKinds must NOT include %q (the entity clone arm is retired; the clone is the deploy-driven from: name:tag drive); got %v", "clone", knownVmSourceKinds)
+	}
+	if !slices.Contains(knownVmSourceKinds, "cloud_image") {
+		t.Fatalf("knownVmSourceKinds must still include cloud_image; got %v", knownVmSourceKinds)
 	}
 }
 

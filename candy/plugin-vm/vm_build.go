@@ -31,6 +31,7 @@ type VmBuildCmd struct {
 	Transport string `name:"transport" help:"Image transport: registry, containers-storage, oci, oci-archive"`
 	Console   bool   `name:"console" help:"Enable console output for debugging"`
 	Force     bool   `name:"force" help:"Rebuild the disk base even when content-fresh (default: skip if the base already matches the source). SINGLE-BED ONLY — do NOT force-rebuild a base that live per-domain overlays back onto (it mutates a read-only backing file); the concurrent-bed R10 uses idempotent-skip, never --force."`
+	FromSnapshot string `name:"from-snapshot" help:"Build the entity's disk as a CLONE of its own golden at this snapshot (the unified from: name:tag functional half — the deploy's from_snapshot flows here)."`
 }
 
 func (c *VmBuildCmd) Run() error {
@@ -44,6 +45,7 @@ func (c *VmBuildCmd) Run() error {
 	return runVmBuildDrive(c.Box, spec.VmBuildRequest{
 		Box: c.Box, Size: c.Size, RootSize: c.RootSize, Tag: c.Tag,
 		Type: c.Type, Transport: c.Transport, Console: c.Console, Force: c.Force,
+		FromSnapshot: c.FromSnapshot,
 	})
 }
 
@@ -134,11 +136,18 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		builtDisk = res.DiskPath
 
 	case "clone":
+		// The unified from: name:tag drive: build the entity as a CLONE of ITSELF at
+		// the deploy's snapshot (req.FromSnapshot — resolveVmBuild set reply.SourceKind
+		// to "clone", the DRIVE, when the request carries from_snapshot). BuildClone
+		// requires source.kind == clone + FromVm + FromSnapshot; set them from the drive.
+		vmSpec.Source.Kind = "clone"
+		vmSpec.Source.FromVm = box
+		vmSpec.Source.FromSnapshot = req.FromSnapshot
 		if err := BuildClone(box, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (clone of %s@%s)\n",
-			filepath.Join(vmDiskDir(box), "disk.qcow2"), vmSpec.Source.FromVm, vmSpec.Source.FromSnapshot)
+			filepath.Join(vmDiskDir(box), "disk.qcow2"), box, req.FromSnapshot)
 		if vmSpec.CloudInit != nil || vmSpec.SSH != nil {
 			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(vmDiskDir(box), "seed.iso"))
 		}

@@ -30,27 +30,16 @@ func TestSplitCsv(t *testing.T) {
 	}
 }
 
-// The bake requires a clone source (a layered VM bakes a clone base). This
-// test drives the REAL guard (requireCloneSource — the function VmBakeCmd.Run
-// calls), so a removed or weakened guard fails the test.
-func TestBakeRequiresCloneKind(t *testing.T) {
-	nonClone := []string{"cloud_image", "bootc", "bootstrap", "iso", "imported"}
-	for _, kind := range nonClone {
-		s := &VmSpec{}
-		s.Source.Kind = kind
-		if err := requireCloneSource(s, "bake-test"); err == nil {
-			t.Fatalf("requireCloneSource must refuse source.kind %q, got nil", kind)
-		}
+// The bake requires --from-snapshot (the entity clone arm is retired — a baked
+// base is a clone of the entity's OWN golden at that snapshot). The guard is the
+// real bakeRequiresSnapshot the Run path calls, so a removed or weakened guard
+// fails the test.
+func TestBakeRequiresFromSnapshot(t *testing.T) {
+	if err := bakeRequiresSnapshot(""); err == nil {
+		t.Fatal("bakeRequiresSnapshot must refuse an empty --from-snapshot")
 	}
-	// A clone source passes.
-	s := &VmSpec{}
-	s.Source.Kind = "clone"
-	if err := requireCloneSource(s, "bake-test"); err != nil {
-		t.Fatalf("requireCloneSource must accept source.kind clone, got %v", err)
-	}
-	// A nil spec is refused (the no-entity path).
-	if err := requireCloneSource(nil, "bake-test"); err == nil {
-		t.Fatal("requireCloneSource must refuse a nil spec")
+	if err := bakeRequiresSnapshot("golden"); err != nil {
+		t.Fatalf("bakeRequiresSnapshot must accept a named snapshot, got %v", err)
 	}
 }
 

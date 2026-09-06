@@ -2,9 +2,6 @@ package vm
 
 import (
 	"fmt"
-	"strings"
-
-	"github.com/opencharly/spec/spec"
 )
 
 // vm_clone_cmd.go — Kong subcommand wiring for `charly vm clone`. The
@@ -31,38 +28,11 @@ type VmCloneCmd struct {
 	Build bool `name:"build" default:"true" help:"After writing vm.yml, run charly vm build to materialize the clone disk"`
 }
 
-// Run executes `charly vm clone`.
+// Run executes `charly vm clone`. RETIRED (Cutover A addendum Phase 3): the command
+// persisted a source.kind: clone ENTITY — the entity arm the retirement removes. The
+// clone is now expressed on the DEPLOY: author `vm: <name>: {from: <src>:<snapshot>}`
+// (the loader splits the tag into from + from_snapshot) and run the deployment; or build
+// a one-off self-clone with `charly vm build <entity> --from-snapshot <tag>`.
 func (c *VmCloneCmd) Run() error {
-	srcVm, srcSnap, err := parseFromRef(c.From)
-	if err != nil {
-		return err
-	}
-
-	if err := writeVmCloneDeclaration(c.Name, srcVm, srcSnap, c.CloudInitClean); err != nil {
-		return fmt.Errorf("writing kind:vm declaration: %w", err)
-	}
-	fmt.Printf("wrote kind:vm declaration %q (clone from %s@%s) to vm.yml\n", c.Name, srcVm, srcSnap)
-
-	if c.Build {
-		fmt.Printf("running charly vm build %s ...\n", c.Name)
-		// The clone declaration is now in charly.yml; drive the standard build
-		// pipeline so the entity builds exactly like any other (resolve → flock →
-		// source.kind dispatch → BuildClone). The source VM and its snapshot must
-		// be live on this host — the snapshot registry lives in the parent's state
-		// dir, and BuildClone refuses a missing snapshot.
-		return runVmBuildDrive(c.Name, spec.VmBuildRequest{Box: c.Name})
-	}
-	return nil
-}
-
-// parseFromRef parses "<vm>" or "<vm>@<snap>".
-func parseFromRef(s string) (vm, snap string, err error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", "", fmt.Errorf("--from is required (e.g. --from arch@baseline)")
-	}
-	if before, after, ok := strings.Cut(s, "@"); ok {
-		return before, after, nil
-	}
-	return s, "", nil
+	return fmt.Errorf("charly vm clone is retired: a clone is expressed on the DEPLOY as from: <src>:<snapshot> (author `vm: <name>: from: <src>:<snapshot>` in a deploy node), or build a one-off self-clone with `charly vm build <entity> --from-snapshot <tag>`")
 }

@@ -23,9 +23,10 @@ import (
 
 // VmBakeCmd implements charly vm bake <name> [--candy a,b].
 type VmBakeCmd struct {
-	Box     string `arg:"" help:"VM name (kind:vm entity with source.kind: clone)"`
-	Candy   string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly fleet add vm:<name>)"`
-	Console bool   `name:"console" help:"Enable console output for debugging the boot"`
+	Box          string `arg:"" help:"VM name (the distro-bearing kind:vm entity whose golden snapshot bakes)"`
+	Candy        string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly fleet add vm:<name>)"`
+	Console      bool   `name:"console" help:"Enable console output for debugging the boot"`
+	FromSnapshot string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
 }
 
 // Run executes charly vm bake.
@@ -41,9 +42,14 @@ func (c *VmBakeCmd) Run() error {
 	if vmSpec == nil {
 		return noVmEntityErr(c.Box)
 	}
-	if err := requireCloneSource(vmSpec, c.Box); err != nil {
+	// R5 retirement (Cutover A addendum Phase 3): the entity clone arm is gone; the bake
+	// base is the entity's OWN golden clone, the snapshot named by --from-snapshot.
+	if err := bakeRequiresSnapshot(c.FromSnapshot); err != nil {
 		return err
 	}
+	vmSpec.Source.Kind = "clone"
+	vmSpec.Source.FromVm = c.Box
+	vmSpec.Source.FromSnapshot = c.FromSnapshot
 
 	rt, err := kit.ResolveRuntime()
 	if err != nil {
@@ -199,16 +205,14 @@ func waitForAgentConnect(vmName string, timeout time.Duration) error {
 	}, timeout, 5*time.Second)
 }
 
-// requireCloneSource is the bake's source-kind guard: a layered VM bakes a
-// clone base, so any other source kind is a hard error. Extracted for the
-// unit test (the guard must fail a real non-clone spec, not a trivially-true
-// comparison).
-func requireCloneSource(vmSpec *VmSpec, vmName string) error {
-	if vmSpec == nil {
-		return noVmEntityErr(vmName)
-	}
-	if vmSpec.Source.Kind != "clone" {
-		return fmt.Errorf("vm bake: source.kind must be clone (a layered VM bakes a clone base); entity %q has kind %q", vmName, vmSpec.Source.Kind)
+
+// bakeRequiresSnapshot is the bake's guard: the base materializes as a clone of the
+// entity's OWN golden, so the snapshot name is required (the retired entity clone arm
+// used to carry it). Extracted for the unit test (the guard must fail a real empty
+// flag, not a trivially-true comparison).
+func bakeRequiresSnapshot(fromSnapshot string) error {
+	if fromSnapshot == "" {
+		return fmt.Errorf("vm bake: --from-snapshot <tag> is required (bake materializes the base as a clone of the entity's own golden at that snapshot)")
 	}
 	return nil
 }
