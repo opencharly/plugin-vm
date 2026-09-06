@@ -47,9 +47,7 @@ func (c *VmBakeCmd) Run() error {
 	if err := bakeRequiresSnapshot(c.FromSnapshot); err != nil {
 		return err
 	}
-	vmSpec.Source.Kind = "clone"
-	vmSpec.Source.FromVm = c.Box
-	vmSpec.Source.FromSnapshot = c.FromSnapshot
+	applyBakeCloneSource(vmSpec, c.Box, c.FromSnapshot)
 
 	rt, err := kit.ResolveRuntime()
 	if err != nil {
@@ -203,6 +201,15 @@ func waitForAgentConnect(vmName string, timeout time.Duration) error {
 		agent := NewGuestAgent(conn.l, dom, 10*time.Second)
 		return agent.Ping()
 	}, timeout, 5*time.Second)
+}
+
+// applyBakeCloneSource sets the bake base's clone source from the drive: the base is a
+// clone of the entity's OWN golden at the named snapshot (the retired entity clone arm
+// used to carry both). Extracted for the unit gate — removing the wiring fails the test.
+func applyBakeCloneSource(vmSpec *VmSpec, box, snapshot string) {
+	vmSpec.Source.Kind = "clone"
+	vmSpec.Source.FromVm = box
+	vmSpec.Source.FromSnapshot = snapshot
 }
 
 // bakeRequiresSnapshot is the bake's guard: the base materializes as a clone of the
