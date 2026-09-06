@@ -8,11 +8,12 @@ import (
 	"github.com/opencharly/spec/spec"
 )
 
-// TestVmBuildDeployFromHop gates the vm-build deploy-from hop (Phase 3): a from: name:tag
-// DRIVE target names the clone-base BED (a deploy whose own from: names the terminal
-// kind:vm template) — the ONE chain resolver (loaderkit.DeployTargetEntity, the same seam
-// the vm-build step threads) must resolve the terminal template. Removing the hop fails
-// the bed case (the target would name the clone-base BED, not the template).
+// TestVmBuildDeployFromHop gates the vm-build deploy-from hop SEAM (Phase 3): a from:
+// name:tag DRIVE target names the clone-base BED (a deploy whose own from: names the
+// terminal kind:vm template) — the ONE chain resolver (loaderkit.DeployTargetEntity, the
+// same seam the vm-build step threads) must resolve the terminal template. The seam is
+// the testable unit; the wiring (resolveVmBuildViaDeployFrom calling it) is thin and
+// covered by the live vm-build path.
 func TestVmBuildDeployFromHop(t *testing.T) {
 	uf := &spec.UnifiedFile{
 		Fleet: map[string]spec.FleetNode{

@@ -4,10 +4,11 @@ import (
 	"testing"
 )
 
-// TestBakeUsesTheDriveCloneWiring gates the bake base wiring (Phase 3): the base
+// TestBakeUsesTheDriveCloneWiring gates the bake base SEAM (Phase 3): the base
 // materializes as a clone of the entity's OWN golden at the named snapshot, via the SAME
 // extracted seam as the build drive (applyCloneDriveSource — R3, one wiring, two
-// consumers). Removing the wiring from VmBakeCmd.Run fails this test.
+// consumers). The seam is the testable unit; the wiring (VmBakeCmd.Run calling it) is
+// thin and covered by the live bake path.
 func TestBakeUsesTheDriveCloneWiring(t *testing.T) {
 	vs := &VmSpec{}
 	applyCloneDriveSource(vs, "cachyos-vm", "golden")
