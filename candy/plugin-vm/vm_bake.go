@@ -47,7 +47,7 @@ func (c *VmBakeCmd) Run() error {
 	if err := bakeRequiresSnapshot(c.FromSnapshot); err != nil {
 		return err
 	}
-	applyBakeCloneSource(vmSpec, c.Box, c.FromSnapshot)
+	applyCloneDriveSource(vmSpec, c.Box, c.FromSnapshot)
 
 	rt, err := kit.ResolveRuntime()
 	if err != nil {
@@ -203,14 +203,9 @@ func waitForAgentConnect(vmName string, timeout time.Duration) error {
 	}, timeout, 5*time.Second)
 }
 
-// applyBakeCloneSource sets the bake base's clone source from the drive: the base is a
-// clone of the entity's OWN golden at the named snapshot (the retired entity clone arm
-// used to carry both). Extracted for the unit gate — removing the wiring fails the test.
-func applyBakeCloneSource(vmSpec *VmSpec, box, snapshot string) {
-	vmSpec.Source.Kind = "clone"
-	vmSpec.Source.FromVm = box
-	vmSpec.Source.FromSnapshot = snapshot
-}
+// The bake base clone-source wiring uses the SAME extracted seam as the build drive
+// (applyCloneDriveSource — vm_build.go): source.kind = clone, from_vm = the entity
+// itself, from_snapshot = the named golden (R3 — one wiring, two consumers).
 
 // bakeRequiresSnapshot is the bake's guard: the base materializes as a clone of the
 // entity's OWN golden, so the snapshot name is required (the retired entity clone arm
