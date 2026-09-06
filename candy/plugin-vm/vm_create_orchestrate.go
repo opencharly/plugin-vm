@@ -165,7 +165,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// POST-INSTALL — it boots the installed guest, never the installer — so the answers
 	// volume must not be re-packed (the base's rendered answers live under the TEMPLATE's
 	// disk dir, not the clone's; re-packing would fail + re-seed a booted guest).
-	if spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" && !diskIsGoldenClone(baseQcow2) {
+	if shouldRepackIsoAnswers(spec, perDomain, seedISOAbs, baseQcow2) {
 		if err := RepackPerDomainSeed(vmDiskDir(entity), seedISOAbs, pubKey); err != nil {
 			return fmt.Errorf("rendering the per-domain answers volume: %w", err)
 		}
@@ -407,6 +407,17 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 		return err
 	}
 	return EnsureSshConfigInclude(home)
+}
+
+// shouldRepackIsoAnswers reports whether the per-domain iso answers volume must be
+// re-packed for this create. Re-packing is required for a per-domain iso install (the
+// domain's own ssh key must be injected into the answers), but SKIPPED for a
+// from:name:tag golden clone: the clone is POST-INSTALL — it boots the installed guest,
+// never the installer — so the answers volume must not be re-packed (the base's rendered
+// answers live under the TEMPLATE's disk dir, not the clone's; re-packing would fail +
+// re-seed a booted guest).
+func shouldRepackIsoAnswers(spec *VmSpec, perDomain bool, seedISOAbs, baseQcow2 string) bool {
+	return spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" && !diskIsGoldenClone(baseQcow2)
 }
 
 // diskIsGoldenClone reports whether the built disk is a from:name:tag golden clone (the
