@@ -70,7 +70,11 @@ func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
 		if err != nil {
 			continue // a missing backing file is a different error (overlay create will fail loudly)
 		}
-		if fi.ModTime().After(created) {
+		// The registry stores Created at RFC3339 second precision; the disk's
+		// capture-finalization write can land sub-second after that timestamp.
+		// Truncate the mtime to seconds so a same-second write is not a false
+		// STALE (the snapshot is valid; only a genuinely later rebuild is stale).
+		if fi.ModTime().Truncate(time.Second).After(created) {
 			return img.Filename, nil
 		}
 	}

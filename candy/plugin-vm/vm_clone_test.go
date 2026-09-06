@@ -86,6 +86,38 @@ func TestSnapshotBackingStale_DetectsRebuiltBase(t *testing.T) {
 	}
 }
 
+// TestSnapshotBackingStale_SameSecondWriteIsNotStale is the precision regression
+// gate: the registry stores Created at RFC3339 SECOND precision, but the disk's
+// capture-finalization write can land sub-second after that timestamp (e.g. the
+// base mtime is 03:17:07.364Z while Created is 03:17:07Z). A same-second write
+// must NOT trip the guard — only a genuinely later rebuild (a later second) is
+// stale. This is the exact false-STALE the check-instrument-omarchy-vm bed hit
+// after a fresh golden re-capture.
+func TestSnapshotBackingStale_SameSecondWriteIsNotStale(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	// The base's final write lands 364ms AFTER the second-truncated Created —
+	// the same second, so the snapshot is valid and must be reported fresh.
+	baseMtime := now.Add(364 * time.Millisecond)
+	entry := makeSnapshotChain(t, baseMtime, now)
+	got, err := snapshotBackingStale(entry)
+	if err != nil {
+		t.Fatalf("snapshotBackingStale: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("a same-second capture-finalization write must be fresh; got stale %q", got)
+	}
+
+	// Control: a write in a LATER second is genuinely stale and must trip.
+	entry2 := makeSnapshotChain(t, now.Add(time.Second+time.Millisecond), now)
+	got, err = snapshotBackingStale(entry2)
+	if err != nil {
+		t.Fatalf("snapshotBackingStale (later second): %v", err)
+	}
+	if got == "" {
+		t.Fatal("a backing write in a later second must be reported stale")
+	}
+}
+
 // cloneSpec builds a minimal clone VmSpec. The parent snapshot need not exist
 // for the guard tests below — they fail before any registry lookup.
 func cloneSpec() *VmSpec {
