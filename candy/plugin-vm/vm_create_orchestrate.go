@@ -1,8 +1,10 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/opencharly/sdk/kit"
@@ -158,8 +160,12 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 
 	// Re-pack the iso answers volume for THIS domain: every answer exactly as the build
 	// rendered it, except authorized_keys, which carries this domain's key. Runs after the
-	// key is resolved and before the domain is defined.
-	if spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" {
+	// key is resolved and before the domain is defined. SKIPPED for a from:name:tag golden
+	// clone (the vm-build drive wrote the disk with a backing file): the clone is
+	// POST-INSTALL — it boots the installed guest, never the installer — so the answers
+	// volume must not be re-packed (the base's rendered answers live under the TEMPLATE's
+	// disk dir, not the clone's; re-packing would fail + re-seed a booted guest).
+	if spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" && !diskIsGoldenClone(baseQcow2) {
 		if err := RepackPerDomainSeed(vmDiskDir(entity), seedISOAbs, pubKey); err != nil {
 			return fmt.Errorf("rendering the per-domain answers volume: %w", err)
 		}
@@ -401,4 +407,23 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 		return err
 	}
 	return EnsureSshConfigInclude(home)
+}
+
+// diskIsGoldenClone reports whether the built disk is a from:name:tag golden clone (the
+// vm-build drive wrote it with a backing file). A golden clone is POST-INSTALL — the iso
+// answers re-pack must be skipped (the clone boots the installed guest, never the installer).
+// Probed via qemu-img info (the same tool the overlay + staleness paths use); a probe failure
+// degrades to "not a clone" (the iso re-pack proceeds — the pre-clone behavior).
+func diskIsGoldenClone(diskPath string) bool {
+	out, err := exec.Command("qemu-img", "info", "--output=json", diskPath).Output()
+	if err != nil {
+		return false
+	}
+	var info struct {
+		BackingFile string `json:"backing-filename"`
+	}
+	if json.Unmarshal(out, &info) != nil {
+		return false
+	}
+	return info.BackingFile != ""
 }
