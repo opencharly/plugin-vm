@@ -36,7 +36,29 @@ import (
 
 // knownVmSourceKinds lists the source.kind values `charly vm build` supports. Used by the
 // unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
-var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso", "clone"}
+// clone is NOT a source kind — it is the DEPLOY-DRIVEN drive (from: name:tag → from_snapshot);
+// the retired entity arm (source.kind: clone) errors loudly in the switch below.
+var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso"}
+
+// vmBuildDriveSourceKind returns the reply SourceKind for a build request: "clone" (the
+// DRIVE, not an entity kind) when the request carries from_snapshot — the unified
+// from: name:tag clone — else the entity's own kind. Extracted for the unit gate.
+func vmBuildDriveSourceKind(entityKind string, req spec.VmBuildRequest) string {
+	if req.FromSnapshot != "" {
+		return "clone"
+	}
+	return entityKind
+}
+
+// applyCloneDriveSource sets BuildClone's input source fields from the from: name:tag drive:
+// source.kind = clone (the drive), from_vm = the entity itself, from_snapshot = the tag.
+// BuildClone validates the inputs; this just fills them from the DRIVE (extracted for the
+// unit gate — the runnable seam the vm-build step threads).
+func applyCloneDriveSource(vmSpec *VmSpec, box, snapshot string) {
+	vmSpec.Source.Kind = "clone"
+	vmSpec.Source.FromVm = box
+	vmSpec.Source.FromSnapshot = snapshot
+}
 
 // noVmEntityErr is the shared "no kind:vm entity" error both entity-lookup failure paths raise.
 func noVmEntityErr(boxName string) error {
@@ -306,6 +328,15 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		ExistingState: existingState,
 	}
 
+	// The unified from: name:tag drive (`vm build <entity> --from-snapshot <tag>`): the build
+	// is a CLONE of the entity's own GOLDEN at that snapshot — no per-kind image resolution is
+	// needed (BuildClone walks the parent snapshot's registry). The entity may carry ANY
+	// distro-bearing source.kind; reply.SourceKind "clone" is the DRIVE, not an entity kind.
+	if vmBuildDriveSourceKind(vmSpec.Source.Kind, req) == "clone" {
+		reply.SourceKind = "clone"
+		return reply, nil
+	}
+
 	switch vmSpec.Source.Kind {
 	case "cloud_image":
 		// Nothing further to resolve — BuildCloudImage fetches its own base image via
@@ -336,13 +367,10 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		}
 
 	case "clone":
-		// Nothing further to resolve — BuildClone reads the parent snapshot's registry
-		// from the parent VM's state dir and needs no host-only lookup (the cloud_image
-		// pass-through pattern). Validate the refs here so a malformed clone declaration
-		// fails at resolve time with a clear error instead of deep inside the build.
-		if vmSpec.Source.FromVm == "" || vmSpec.Source.FromSnapshot == "" {
-			return spec.VmBuildReply{}, fmt.Errorf("vm %q: source.from_vm and source.from_snapshot are required for clone VMs", boxName)
-		}
+		// R5 retirement (Cutover A addendum Phase 3): the ENTITY arm of the clone is gone.
+		// A clone is expressed on the DEPLOY as from: <entity>:<snapshot> (the loader splits
+		// it into from + from_snapshot), or built one-off with --from-snapshot.
+		return spec.VmBuildReply{}, fmt.Errorf("vm %q: source.kind: clone on the ENTITY is retired — express the clone on the deploy with from: <entity>:<snapshot>, or build a one-off clone with \"charly vm build <entity> --from-snapshot <tag>\"", boxName)
 
 	default:
 		return spec.VmBuildReply{}, fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", boxName, vmSpec.Source.Kind, strings.Join(knownVmSourceKinds, ", "))
