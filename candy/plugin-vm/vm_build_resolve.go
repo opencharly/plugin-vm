@@ -60,6 +60,22 @@ func applyCloneDriveSource(vmSpec *VmSpec, box, snapshot string) {
 	vmSpec.Source.FromSnapshot = snapshot
 }
 
+// resolveVmBuildViaDeployFrom hops a from: name:tag DRIVE target through the deploy map:
+// boxName names a DEPLOY (the base bed) whose from: names the base kind:vm entity — resolve
+// that entity. Used ONLY when the drive carries from_snapshot (the clone drive); the plain
+// build keeps the strict entity lookup.
+func resolveVmBuildViaDeployFrom(ctx context.Context, ex *sdk.Executor, dir, boxName string) (*VmSpec, error) {
+	uf, ok, err := loadVmProjectUnified(ctx, ex, dir)
+	if err != nil || !ok {
+		return nil, fmt.Errorf("loading charly.yml for the deploy-from hop: %w", err)
+	}
+	target, has := loaderkit.DeployTargetEntity(uf, boxName)
+	if !has || target == boxName {
+		return nil, fmt.Errorf("vm %q: not a kind:vm entity nor a deploy whose from: names one (wanted the clone base)", boxName)
+	}
+	return resolveVmBuildEntity(ctx, ex, dir, target)
+}
+
 // noVmEntityErr is the shared "no kind:vm entity" error both entity-lookup failure paths raise.
 func noVmEntityErr(boxName string) error {
 	return fmt.Errorf(
@@ -280,7 +296,20 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 
 	vmSpec, err := resolveVmBuildEntity(ctx, ex, dir, boxName)
 	if err != nil {
-		return spec.VmBuildReply{}, err
+		// The from: name:tag DRIVE (req.FromSnapshot != ""): the build target may be a
+		// DEPLOY whose from: names the base VM entity — the clone-base-bed pattern
+		// (the golden registry lives under the BASE BED's name, so `vm build
+		// <base-bed> --from-snapshot <tag>` resolves the base bed's from chain to the
+		// entity and builds THAT spec as a clone of the base at the snapshot).
+		if req.FromSnapshot != "" {
+			if hspec, herr := resolveVmBuildViaDeployFrom(ctx, ex, dir, boxName); herr == nil && hspec != nil {
+				vmSpec = hspec
+			} else {
+				return spec.VmBuildReply{}, err
+			}
+		} else {
+			return spec.VmBuildReply{}, err
+		}
 	}
 
 	rt, rtErr := kit.ResolveRuntime()

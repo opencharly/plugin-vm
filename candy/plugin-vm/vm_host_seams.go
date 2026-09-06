@@ -102,8 +102,15 @@ func hostConfigResolve(entity string) (resolvedConfig, error) {
 			cfg.VmEntities = append(cfg.VmEntities, name)
 		}
 		if entity != "" {
-			if body, has := uf.VM()[entity]; has && len(body) > 0 {
-				vm, verr := loaderkit.ResolveVmEntityViaExecutor(cmdCtx, cmdExec, dir, entity)
+			// The from: name:tag deploy-hop (Phase 3): the requested name may be the BASE BED
+			// (the clone-base deploy) whose from: names the terminal template — the ONE
+			// chain resolver (loaderkit.DeployTargetEntity) handles the plain-entity and
+			// deploy-hop cases alike. The DISK/domain keying below stays on c.Box (the
+			// requested name — where the vm-build drive wrote output/qcow2/<box>/); only the
+			// SPEC resolve follows the chain.
+			target, ok := loaderkit.DeployTargetEntity(uf, entity)
+			if ok {
+				vm, verr := loaderkit.ResolveVmEntityViaExecutor(cmdCtx, cmdExec, dir, target)
 				if verr != nil {
 					return resolvedConfig{}, verr
 				}
