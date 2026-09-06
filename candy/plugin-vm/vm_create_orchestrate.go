@@ -421,9 +421,12 @@ func diskIsGoldenClone(diskPath string) bool {
 	}
 	var info struct {
 		BackingFile string `json:"backing-filename"`
+		FullBacking string `json:"full-backing-filename"`
 	}
 	if json.Unmarshal(out, &info) != nil {
 		return false
 	}
-	return info.BackingFile != ""
+	// qemu-img emits the RELATIVE name as backing-filename and the ABSOLUTE as
+	// full-backing-filename; either marks the golden clone.
+	return info.BackingFile != "" || info.FullBacking != ""
 }
