@@ -1,8 +1,10 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/opencharly/sdk/kit"
@@ -91,6 +93,12 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		qcow2Abs, _ = filepath.Abs(overlay)
 	}
 
+	// A from:name:tag golden clone (the vm-build drive wrote the built disk with a
+	// backing file) is POST-INSTALL: it needs the per-domain seed (the DOMAIN's ssh
+	// key) but never the installer answers. Probed once here — the ground truth both
+	// the seed regeneration and the iso re-pack skip share.
+	isGoldenClone := diskIsGoldenClone(baseQcow2)
+
 	// Resolve the seed ISO path. A deploy renders its OWN per-domain seed (per-domain ssh key +
 	// instance-id — two beds must NEVER share one seed, or their cloud-init keys/instance-ids
 	// collide); a direct create regenerates the entity's base seed in place (unchanged).
@@ -128,7 +136,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// create` without forcing an explicit `charly vm build`. The qcow2 disk is
 	// left alone — only the seed ISO is cheap to rebuild. On the deploy path this
 	// renders the per-domain seed (with the per-domain ssh key) from scratch.
-	if (spec.Source.Kind == "cloud_image" || spec.Source.Kind == "clone") && seedISOAbs != "" {
+	if needsPerDomainSeed(spec, isGoldenClone) && seedISOAbs != "" {
 		// existingState (the prior instance-id) comes from the config-resolve seam's VmState.
 		if err := RegenerateSeedISO(spec, seedISOAbs, vmStateDir, vmState); err != nil {
 			return fmt.Errorf("regenerating seed ISO: %w", err)
@@ -158,8 +166,12 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 
 	// Re-pack the iso answers volume for THIS domain: every answer exactly as the build
 	// rendered it, except authorized_keys, which carries this domain's key. Runs after the
-	// key is resolved and before the domain is defined.
-	if spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" {
+	// key is resolved and before the domain is defined. SKIPPED for a from:name:tag golden
+	// clone (the vm-build drive wrote the disk with a backing file): the clone is
+	// POST-INSTALL — it boots the installed guest, never the installer — so the answers
+	// volume must not be re-packed (the base's rendered answers live under the TEMPLATE's
+	// disk dir, not the clone's; re-packing would fail + re-seed a booted guest).
+	if shouldRepackIsoAnswers(spec, perDomain, seedISOAbs, isGoldenClone) {
 		if err := RepackPerDomainSeed(vmDiskDir(entity), seedISOAbs, pubKey); err != nil {
 			return fmt.Errorf("rendering the per-domain answers volume: %w", err)
 		}
@@ -401,4 +413,47 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 		return err
 	}
 	return EnsureSshConfigInclude(home)
+}
+
+// needsPerDomainSeed reports whether the per-domain seed must be (re)generated for
+// this create: cloud_image + clone sources always (the per-domain key + fresh
+// instance-id), and a from:name:tag golden clone (the disk's backing file marks it) —
+// the clone is POST-INSTALL, so it needs the per-domain key injection but never the
+// installer answers (the re-pack is skipped separately).
+func needsPerDomainSeed(spec *VmSpec, isGoldenClone bool) bool {
+	return spec.Source.Kind == "cloud_image" || spec.Source.Kind == "clone" || isGoldenClone
+}
+
+// shouldRepackIsoAnswers reports whether the per-domain iso answers volume must be
+// re-packed for this create. Re-packing is required for a per-domain iso install (the
+// domain's own ssh key must be injected into the answers), but SKIPPED for a
+// from:name:tag golden clone: the clone is POST-INSTALL — it boots the installed guest,
+// never the installer — so the answers volume must not be re-packed (the base's rendered
+// answers live under the TEMPLATE's disk dir, not the clone's; re-packing would fail +
+// re-seed a booted guest). isGoldenClone is the caller's single disk probe (the ground
+// truth both the seed regeneration and this skip share).
+func shouldRepackIsoAnswers(spec *VmSpec, perDomain bool, seedISOAbs string, isGoldenClone bool) bool {
+	return spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" && !isGoldenClone
+}
+
+// diskIsGoldenClone reports whether the built disk is a from:name:tag golden clone (the
+// vm-build drive wrote it with a backing file). A golden clone is POST-INSTALL — the iso
+// answers re-pack must be skipped (the clone boots the installed guest, never the installer).
+// Probed via qemu-img info (the same tool the overlay + staleness paths use); a probe failure
+// degrades to "not a clone" (the iso re-pack proceeds — the pre-clone behavior).
+func diskIsGoldenClone(diskPath string) bool {
+	out, err := exec.Command("qemu-img", "info", "--output=json", diskPath).Output()
+	if err != nil {
+		return false
+	}
+	var info struct {
+		BackingFile string `json:"backing-filename"`
+		FullBacking string `json:"full-backing-filename"`
+	}
+	if json.Unmarshal(out, &info) != nil {
+		return false
+	}
+	// qemu-img emits the RELATIVE name as backing-filename and the ABSOLUTE as
+	// full-backing-filename; either marks the golden clone.
+	return info.BackingFile != "" || info.FullBacking != ""
 }
