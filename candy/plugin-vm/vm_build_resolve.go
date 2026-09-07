@@ -32,7 +32,7 @@ import (
 // dispatchBuild already drives, mirroring build.go's dispatchBuild — the pattern that ALSO backs
 // candy/plugin-build's own build:ensure fallback); resolveBootcImageRef + vmDir + the deploy-state
 // read are already 100% pure sdk (kit.ResolveLocalImageRef, vmshared.VmStateRoot,
-// loaderkit.LoadHostFleetConfigViaExecutor) with zero core coupling.
+// loaderkit.LoadHostDeployConfigViaExecutor) with zero core coupling.
 
 // knownVmSourceKinds lists the source.kind values `charly vm build` supports. Used by the
 // unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
@@ -335,7 +335,7 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 	}
 
 	var existingState *spec.VmDeployState
-	if dc, derr := loaderkit.LoadHostFleetConfigViaExecutor(ctx, ex); derr == nil && dc != nil {
+	if dc, derr := loaderkit.LoadHostDeployConfigViaExecutor(ctx, ex); derr == nil && dc != nil {
 		if e, ok := dc.LookupKey("vm:" + boxName); ok {
 			existingState = e.VmState
 		}

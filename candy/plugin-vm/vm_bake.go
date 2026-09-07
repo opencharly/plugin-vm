@@ -17,14 +17,14 @@ import (
 // overlay Containerfile. A source.kind: clone entity is materialized (the
 // base), the domain boots, the entity's own layers are applied IN-GUEST via the
 // SHARED InstallPlan IR (the same walk the vm deploy runs — the layer
-// application is the existing charly fleet add vm:<name> path, which the runner
+// application is the existing charly deploy add vm:<name> path, which the runner
 // invokes between boot and the snapshot freeze), a consistent snapshot captures
 // the baked state, and the box image wraps it.
 
 // VmBakeCmd implements charly vm bake <name> [--candy a,b].
 type VmBakeCmd struct {
 	Box          string `arg:"" help:"VM name (the distro-bearing kind:vm entity whose golden snapshot bakes)"`
-	Candy        string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly fleet add vm:<name>)"`
+	Candy        string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly deploy add vm:<name>)"`
 	Console      bool   `name:"console" help:"Enable console output for debugging the boot"`
 	FromSnapshot string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
 }
@@ -73,14 +73,14 @@ func (c *VmBakeCmd) Run() error {
 	}
 
 	// Phase 3 — the in-guest layer application IS the vm deploy's shared-IR
-	// walk (charly fleet add vm:<name> runs kit.WalkPlans over the guest SSH
+	// walk (charly deploy add vm:<name> runs kit.WalkPlans over the guest SSH
 	// executor). Applied BEFORE the snapshot freeze so the baked box carries
 	// them. With --candy, print the exact command and return (the runner
 	// applies the layers, then re-runs WITHOUT --candy to freeze + emit).
 	layers := splitCsv(c.Candy)
 	if len(layers) > 0 {
 		fmt.Fprintf(os.Stderr, "bake %q: phase 3 — apply the layer(s) in-guest with the shared IR walk:\n", c.Box)
-		fmt.Fprintf(os.Stderr, "  charly fleet add vm:%s %s\n", c.Box, strings.Join(layers, " "))
+		fmt.Fprintf(os.Stderr, "  charly deploy add vm:%s %s\n", c.Box, strings.Join(layers, " "))
 		fmt.Fprintf(os.Stderr, "then re-run: charly vm bake %s (WITHOUT --candy) to freeze the baked state and emit the box\n", c.Box)
 		return nil
 	}

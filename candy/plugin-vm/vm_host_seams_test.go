@@ -16,7 +16,7 @@ import (
 // covered by the live create path.
 func TestVmHostSeamsDeployHop(t *testing.T) {
 	uf := &spec.UnifiedFile{
-		Fleet: map[string]spec.FleetNode{
+		Deploy: map[string]spec.DeployNode{
 			"check-omarchy-clone-base": {From: "omarchy-vm"},
 		},
 		PluginKinds: map[string]map[string]json.RawMessage{

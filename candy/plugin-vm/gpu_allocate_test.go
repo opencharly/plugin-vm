@@ -19,7 +19,7 @@ func TestAutoAllocate_DropsStaleHostdevForNonGPUClaimant(t *testing.T) {
 			},
 		},
 	}
-	cnode := &FleetNode{} // no requires_exclusive -> no GPU needed
+	cnode := &DeployNode{} // no requires_exclusive -> no GPU needed
 	got, err := autoAllocateExclusiveGPUs(nil, ovr, cnode, nil, "test-vm", "libvirt")
 	if err != nil {
 		t.Fatalf("autoAllocate: %v", err)
@@ -35,7 +35,7 @@ func TestAutoAllocate_DropsStaleHostdevForNonGPUClaimant(t *testing.T) {
 // TestAutoAllocate_KeepsHostdevForGPUClaimant guards the GPU-claimant path.
 func TestAutoAllocate_KeepsHostdevForGPUClaimant(t *testing.T) {
 	ovr := &VmInstanceOverride{}
-	cnode := &FleetNode{RequiresExclusive: []string{"nvidia-gpu"}}
+	cnode := &DeployNode{RequiresExclusive: []string{"nvidia-gpu"}}
 	resources := map[string]*ResolvedResource{
 		"nvidia-gpu": {Gpu: &ResolvedGpuSelector{Vendor: "0x10de"}},
 	}

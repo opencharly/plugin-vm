@@ -8,7 +8,7 @@ package vm
 // spec.LabelVmBox) and whose single layer carries the disk artifact at
 // /disk.qcow2. The emitter is deploykit.EmitVmBox (sdk PR #202); its read-back
 // side (deploykit.VmCapabilitiesFromLabels) is what a future
-// `charly fleet from-box vm:<ref>` consumes (cutover task 5).
+// `charly deploy from-box vm:<ref>` consumes (cutover task 5).
 //
 // Best-effort by contract: the disk build is the primary artifact and the box
 // is its metadata wrapper, so a missing engine or a failed emit only warns and
