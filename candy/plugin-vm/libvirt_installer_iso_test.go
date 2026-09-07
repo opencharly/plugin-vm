@@ -98,7 +98,7 @@ func TestRenderDomainXML_NoInstallerLeavesBootDevicesAlone(t *testing.T) {
 	}
 	// Still a CDROM on sata, specifically. Moving cloud_image/bootc/bootstrap seeds to
 	// virtio would change every existing VM: cloud-init finds a NoCloud source on either
-	// bus and has never raced here, so there is nothing to gain and a fleet to regress.
+	// bus and has never raced here, so there is nothing to gain and a deploy to regress.
 	if !strings.Contains(out, `<target dev="sda" bus="sata"`) {
 		t.Errorf("a non-installer VM's seed must stay a sata cdrom; got:\n%s", out)
 	}
