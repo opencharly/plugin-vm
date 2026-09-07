@@ -23,6 +23,7 @@ import (
 	"github.com/opencharly/plugin-vm/candy/plugin-vm/params"
 	"github.com/opencharly/sdk"
 	"github.com/opencharly/sdk/kit"
+	"github.com/opencharly/spec/ops"
 	pb "github.com/opencharly/spec/proto"
 	"github.com/opencharly/spec/spec"
 )
@@ -128,15 +129,19 @@ func (vmProvider) Invoke(ctx context.Context, req *pb.InvokeRequest) (*pb.Invoke
 	// is produced inside this Invoke (the recorder writes frames.mjpeg detached), so
 	// artifactMethod stays false.
 	if method == "session" {
-		cc, cerr := sdk.NewCheckContext(req.GetExecutorBrokerId(), req.GetEnvJson())
-		if cerr != nil {
-			return sdk.ResultJSON("fail", fmt.Sprintf("libvirt: session: %v", cerr))
-		}
 		ep, skipMsg := resolveLibvirtSessionEndpoint(&in, env.Box)
 		if skipMsg != "" {
 			return sdk.ResultJSON("skip", skipMsg)
 		}
-		out, runErr := runSession(ctx, cc, ep, &in, env.Venue)
+		// The reverse leg is served placement-invisibly: ExecutorForInvoke
+		// resolves the in-proc executor client off the Invoke context when this
+		// provider is COMPILED-IN (plugin-vm's canonical placement — sdk.NewCheckContext
+		// only works out-of-process, where the go-plugin broker exists).
+		d, derr := sdk.ExecutorForInvoke(ctx, req.GetExecutorBrokerId())
+		if derr != nil {
+			return sdk.ResultJSON("fail", fmt.Sprintf("libvirt: session: %v", derr))
+		}
+		out, runErr := runSession(ctx, executorSessionDispatcher{ex: d}, ep, &in, env.Venue)
 		return sdk.VerbVerdict("libvirt", method, out, runErr, &op, false)
 	}
 
@@ -225,6 +230,20 @@ func resolveLibvirtSessionEndpoint(in *params.LibvirtVerbInput, box string) (*vm
 		return nil, fmt.Sprintf("libvirt session — N/A: domain %q not running", ep.Domain)
 	}
 	return ep, ""
+}
+
+// executorSessionDispatcher adapts the host *spec/exec.Executor (resolved by
+// sdk.ExecutorForInvoke — placement-invisible: the in-proc executor client for a
+// COMPILED-IN provider, the go-plugin broker for out-of-process) to the narrow
+// sessionDispatcher surface the session method needs. This is the SAME InvokeProvider
+// leg sdkCheckContext wraps for the out-of-process placement — one behavior, both
+// placements.
+type executorSessionDispatcher struct {
+	ex *sdk.Executor
+}
+
+func (d executorSessionDispatcher) InvokeProvider(ctx context.Context, class, word, op string, paramsJSON, env []byte) ([]byte, error) {
+	return d.ex.InvokeProvider(ctx, class, word, op, paramsJSON, env, ops.InvokeProviderOpts{})
 }
 
 // captureMu serializes the os.Stdout/os.Stderr redirect in captureOutput — verb Invokes can

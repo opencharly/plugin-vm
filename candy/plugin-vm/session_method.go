@@ -33,9 +33,15 @@ import (
 	"time"
 
 	"github.com/opencharly/plugin-vm/candy/plugin-vm/params"
-	"github.com/opencharly/sdk/kit"
 	"github.com/opencharly/spec/ops"
 )
+
+// sessionDispatcher is the reverse-leg surface the session method needs: exactly the
+// InvokeProvider leg of kit.CheckContext (the verb:session seam dispatch). Narrow and
+// interface-scoped so the PROVIDER can serve it from EITHER placement: the
+// out-of-process sdkCheckContext (sdk.NewCheckContext) OR the in-proc executor client
+// (sdk.ExecutorForInvoke — the placement-invisible accessor). plugin-vm's canonical
+// placement is COMPILED-IN, so the compiled-in executor path is the one that must work.
 
 // sessionRequest is the wire request the runner's session service decodes
 // (plugin-check/candy/plugin-check/session_seam.go, the sessionSeamRequest shape).
@@ -53,12 +59,22 @@ type sessionStatusReply struct {
 	Alive bool `json:"alive,omitempty"`
 }
 
+// sessionDispatcher is the reverse-leg surface the session method needs: exactly the
+// InvokeProvider leg of kit.CheckContext (the verb:session seam dispatch). Narrow and
+// interface-scoped so the PROVIDER can serve it from EITHER placement: the
+// out-of-process sdkCheckContext (sdk.NewCheckContext) OR the in-proc executor client
+// (sdk.ExecutorForInvoke — the placement-invisible accessor). plugin-vm's canonical
+// placement is COMPILED-IN, so the compiled-in executor path is the one that must work.
+type sessionDispatcher interface {
+	InvokeProvider(ctx context.Context, class, word, op string, paramsJSON, env []byte) ([]byte, error)
+}
+
 // runSession dispatches the session method against the runner service. The endpoint
 // is the PROVIDER-resolved one (the Invoke already resolved the domain + the live
 // gate); the recorder re-dials libvirt detached. venueDefault is the CheckEnv
 // snapshot's venue id, used when the authored input carries none (evidence-row
 // provenance).
-func runSession(ctx context.Context, cc kit.CheckContext, ep *vmEndpoint, in *params.LibvirtVerbInput, venueDefault string) (string, error) {
+func runSession(ctx context.Context, cc sessionDispatcher, ep *vmEndpoint, in *params.LibvirtVerbInput, venueDefault string) (string, error) {
 	// session identity: the runner injects session_id for instruments; a PLAN-STEP
 	// session (authoring libvirt: {method: session, action: start, session_id: x}
 	// directly in a plan) falls back to "default" — the same fallback the
@@ -120,7 +136,7 @@ func buildSessionSpawn(in *params.LibvirtVerbInput, ep *vmEndpoint, exe, venue, 
 // recorder spawn to the runner service and reports the session as started. state_dir
 // is REQUIRED: the recorder (and the runner's handle) land the capture + evidence
 // there, and the instrument lifecycle reads row.json back from it.
-func sessionStart(ctx context.Context, cc kit.CheckContext, ep *vmEndpoint, in *params.LibvirtVerbInput, venueDefault string) (string, error) {
+func sessionStart(ctx context.Context, cc sessionDispatcher, ep *vmEndpoint, in *params.LibvirtVerbInput, venueDefault string) (string, error) {
 	if in.StateDir == "" {
 		return "", fmt.Errorf("session start: state_dir required")
 	}
@@ -147,7 +163,7 @@ func sessionStart(ctx context.Context, cc kit.CheckContext, ep *vmEndpoint, in *
 // sessionStop signals the runner to finalize the session (SIGTERM to the detached
 // recorder), then verifies the recorder's finalize actually landed: the evidence
 // row.json must exist in the state dir. Returns a one-line summary of the row.
-func sessionStop(ctx context.Context, cc kit.CheckContext, in *params.LibvirtVerbInput) (string, error) {
+func sessionStop(ctx context.Context, cc sessionDispatcher, in *params.LibvirtVerbInput) (string, error) {
 	if in.StateDir == "" {
 		return "", fmt.Errorf("session stop: state_dir required to verify the evidence row")
 	}
@@ -222,7 +238,7 @@ func rowArtifact(row evidenceRow) string {
 }
 
 // sessionStatus asks the runner for the session handle's liveness and reports it.
-func sessionStatus(ctx context.Context, cc kit.CheckContext, in *params.LibvirtVerbInput) (string, error) {
+func sessionStatus(ctx context.Context, cc sessionDispatcher, in *params.LibvirtVerbInput) (string, error) {
 	// log_dir rides the status request too — the runner resolves the handle under
 	// the run dir the spawn used (same contract as stop).
 	req := sessionRequest{Op: "status", SessionID: in.SessionId, LogDir: in.LogDir}
@@ -238,7 +254,7 @@ func sessionStatus(ctx context.Context, cc kit.CheckContext, in *params.LibvirtV
 }
 
 // submitSession sends a session-service request; success is the empty reply.
-func submitSession(ctx context.Context, cc kit.CheckContext, req sessionRequest) error {
+func submitSession(ctx context.Context, cc sessionDispatcher, req sessionRequest) error {
 	_, err := submitSessionReply(ctx, cc, req)
 	return err
 }
@@ -259,7 +275,7 @@ func sessionInvokeArgs(req sessionRequest) (string, string, []byte, error) {
 	return "verb", "session", reqJSON, nil
 }
 
-func submitSessionReply(ctx context.Context, cc kit.CheckContext, req sessionRequest) ([]byte, error) {
+func submitSessionReply(ctx context.Context, cc sessionDispatcher, req sessionRequest) ([]byte, error) {
 	class, word, reqJSON, err := sessionInvokeArgs(req)
 	if err != nil {
 		return nil, err
