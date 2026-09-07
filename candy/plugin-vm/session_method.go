@@ -132,6 +132,53 @@ func buildSessionSpawn(in *params.LibvirtVerbInput, ep *vmEndpoint, exe, venue, 
 	}
 }
 
+// resolveRecorderExe resolves the binary the runner spawns for the DETACHED recorder.
+// plugin-vm's canonical placement is COMPILED-IN (charly's compiled_plugins list), where
+// os.Executable() is the CHARLY binary — which carries NO recorder shim (the
+// CHARLY_LIBVIRT_RECORDER mode lives in THIS plugin's own cmd/serve binary). Prefer the
+// plugin's serve twin on the baked-plugin search path with the HOST LOADER'S OWN
+// precedence (bakedPluginDirs): $CHARLY_PLUGIN_DIR first — an explicit operator
+// override, version-consistent by construction — then the FHS /usr/lib/charly/plugins,
+// and ONLY for a packaged install (the current binary under /usr/bin or /usr/local/bin):
+// a dev/worktree binary must not reach into the installed package's plugins, which may be
+// built against a different charly version (issue #328 — the loader's own rule).
+// $CHARLY_PLUGIN_ONLY=1 drops the FHS leg. Fall back to the current binary: the
+// OUT-OF-PROCESS placement, where the current binary IS the twin.
+func resolveRecorderExe() string {
+	dirs := []string{os.Getenv("CHARLY_PLUGIN_DIR")}
+	if os.Getenv("CHARLY_PLUGIN_ONLY") != "1" && packagedInstallExeLike() {
+		dirs = append(dirs, "/usr/lib/charly/plugins")
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		p := filepath.Join(d, "plugin-vm")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	return ""
+}
+
+// packagedInstallExeLike reports whether the current binary lives at a packaged-install
+// location (the loader's packagedInstallDirs — /usr/bin, /usr/local/bin): the only case
+// where the FHS plugin twin is version-consistent enough to carry the recorder.
+func packagedInstallExeLike() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	switch dir := filepath.Dir(exe); dir {
+	case "/usr/bin", "/usr/local/bin":
+		return true
+	}
+	return false
+}
+
 // sessionStart resolves nothing more (the endpoint came from Invoke) — it submits the
 // recorder spawn to the runner service and reports the session as started. state_dir
 // is REQUIRED: the recorder (and the runner's handle) land the capture + evidence
@@ -140,9 +187,9 @@ func sessionStart(ctx context.Context, cc sessionDispatcher, ep *vmEndpoint, in 
 	if in.StateDir == "" {
 		return "", fmt.Errorf("session start: state_dir required")
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("session start: resolve own binary: %w", err)
+	exe := resolveRecorderExe()
+	if exe == "" {
+		return "", fmt.Errorf("session start: resolve recorder binary: no shimmed plugin binary on the baked-plugin search path and os.Executable() failed")
 	}
 	venue := in.Venue
 	if venue == "" {

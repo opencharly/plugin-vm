@@ -107,6 +107,50 @@ func TestCaptureSessionEmptyStateDir(t *testing.T) {
 	}
 }
 
+// TestResolveRecorderExe guards the recorder-binary resolution the live run exposed:
+// plugin-vm's canonical placement is COMPILED-IN, where os.Executable() is the CHARLY
+// binary — which carries no recorder shim (the shim lives in this plugin's serve
+// binary). The resolution must prefer the plugin's serve twin on the baked-plugin
+// search path ($CHARLY_PLUGIN_DIR first, then the FHS /usr/lib/charly/plugins;
+// $CHARLY_PLUGIN_ONLY=1 drops the FHS leg — the loader's own semantics), falling back
+// to the current binary only when no twin exists (the out-of-process placement, where
+// the current binary IS the twin).
+func TestResolveRecorderExe(t *testing.T) {
+	// 1) The twin on $CHARLY_PLUGIN_DIR wins (the first-hit precedence).
+	dir := t.TempDir()
+	twin := filepath.Join(dir, "plugin-vm")
+	if err := os.WriteFile(twin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write twin: %v", err)
+	}
+	t.Setenv("CHARLY_PLUGIN_DIR", dir)
+	if got := resolveRecorderExe(); got != twin {
+		t.Errorf("resolveRecorderExe with twin on CHARLY_PLUGIN_DIR = %q, want %q", got, twin)
+	}
+	// 2) CHARLY_PLUGIN_DIR set but WITHOUT the twin: the FHS leg is skipped under
+	// CHARLY_PLUGIN_ONLY=1 (deterministic), so the current binary is the fallback.
+	t.Setenv("CHARLY_PLUGIN_DIR", filepath.Join(t.TempDir()))
+	t.Setenv("CHARLY_PLUGIN_ONLY", "1")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if got := resolveRecorderExe(); got != self {
+		t.Errorf("resolveRecorderExe with empty dir + PLUGIN_ONLY = %q, want fallback %q", got, self)
+	}
+	// 3) An explicit dir listing a NON-EXECUTABLE/garbage twin still resolves by
+	// presence (os.Stat only — the runner owns exec failure reporting).
+	t.Setenv("CHARLY_PLUGIN_ONLY", "")
+	bd := t.TempDir()
+	bad := filepath.Join(bd, "plugin-vm")
+	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write plain twin: %v", err)
+	}
+	t.Setenv("CHARLY_PLUGIN_DIR", bd)
+	if got := resolveRecorderExe(); got != bad {
+		t.Errorf("resolveRecorderExe = %q, want %q (presence-only resolution)", got, bad)
+	}
+}
+
 // TestBuildSessionSpawn asserts the exact spawn request the provider submits to the
 // runner's generic session service: this plugin's binary in recorder mode + the
 // endpoint/identity env, with the venue default from the CheckEnv snapshot applied.
