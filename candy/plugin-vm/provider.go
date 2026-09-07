@@ -35,6 +35,8 @@ import (
 type vmEnv struct {
 	Box  string `json:"box"`
 	Mode string `json:"mode"` // "live" | "box"
+	// Venue is the CheckEnv snapshot's venue id (session evidence-row provenance).
+	Venue string `json:"venue,omitempty"`
 	// VmOp selects an internal (non-verb) VM-resolution op: "domain-state" | "list-domains" |
 	// "resolve-spice" | "resolve-vnc". Empty for a `libvirt:` verb check.
 	VmOp       string `json:"vm_op,omitempty"`
@@ -117,6 +119,27 @@ func (vmProvider) Invoke(ctx context.Context, req *pb.InvokeRequest) (*pb.Invoke
 		return sdk.ResultJSON("skip", fmt.Sprintf("libvirt: %s requires a running VM (skip under charly check box)", method))
 	}
 
+	// session (Cutover E, E-2): the DETACHED recorder holds the libvirt RPC — the
+	// provider never dials for a session (the recorder re-dials detached). The
+	// endpoint resolution below gates on the live deployment (domain present +
+	// running, mirroring the record-session contract); start hands the spawn to the
+	// runner's generic background-session service (verb:session) over the
+	// InvokeProvider reverse leg; stop/status talk to that same service. No artifact
+	// is produced inside this Invoke (the recorder writes frames.mjpeg detached), so
+	// artifactMethod stays false.
+	if method == "session" {
+		cc, cerr := sdk.NewCheckContext(req.GetExecutorBrokerId(), req.GetEnvJson())
+		if cerr != nil {
+			return sdk.ResultJSON("fail", fmt.Sprintf("libvirt: session: %v", cerr))
+		}
+		ep, skipMsg := resolveLibvirtSessionEndpoint(&in, env.Box)
+		if skipMsg != "" {
+			return sdk.ResultJSON("skip", skipMsg)
+		}
+		out, runErr := runSession(ctx, cc, ep, &in, env.Venue)
+		return sdk.VerbVerdict("libvirt", method, out, runErr, &op, false)
+	}
+
 	out, capturedStderr, runErr := dispatchLibvirtVerb(&op, &in, env.Box)
 
 	exit := 0
@@ -176,6 +199,32 @@ func dispatchLibvirtVerb(op *spec.Op, in *params.LibvirtVerbInput, box string) (
 		var cli LibvirtCmd
 		return sdk.RunInProcCLI("libvirt", &cli, args)
 	})
+}
+
+// resolveLibvirtSessionEndpoint resolves the provider-side session endpoint: the libvirt
+// domain name for the deployment's VM (charly-<vm>) + the connection URI ("" →
+// qemu:///session). The live gate mirrors the record-session contract (vnc's endpoint
+// resolution) — the domain must EXISTS and RUN, or the step SKIPs (N/A) exactly like a
+// deployment with no resolved display endpoint. The recorder re-dials the endpoint
+// detached; the provider never holds the connection beyond the gate.
+func resolveLibvirtSessionEndpoint(in *params.LibvirtVerbInput, box string) (*vmEndpoint, string) {
+	if box == "" {
+		return nil, "libvirt session has no VM target (box=\"\")"
+	}
+	ep := &vmEndpoint{Domain: vmDomainNameFor(box), URI: in.URI}
+	conn, err := connectLibvirt(in.URI)
+	if err != nil {
+		return nil, fmt.Sprintf("libvirt session — N/A: connect: %v", err)
+	}
+	defer conn.Close() //nolint:errcheck
+	dom, err := conn.lookupDomain(ep.Domain)
+	if err != nil {
+		return nil, fmt.Sprintf("libvirt session — N/A: domain %q not found", ep.Domain)
+	}
+	if st, serr := conn.domainState(dom); serr == nil && st != libvirt.DomainRunning {
+		return nil, fmt.Sprintf("libvirt session — N/A: domain %q not running", ep.Domain)
+	}
+	return ep, ""
 }
 
 // captureMu serializes the os.Stdout/os.Stderr redirect in captureOutput — verb Invokes can

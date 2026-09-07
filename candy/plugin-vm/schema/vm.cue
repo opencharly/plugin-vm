@@ -33,7 +33,14 @@
 #LibvirtVerbInput: {
 	// method — the libvirt method name (the former core #LibvirtMethod enum; the
 	// verb's PRIMARY input field, so `libvirt: info` desugars to {method: "info"}).
-	method: ("list" | "info" | "screenshot" | "send-key" | "passwd" | "qmp" | "domain-xml" | "console" | "events" | "guest/ping" | "guest/info" | "guest/os-info" | "guest/time" | "guest/hostname" | "guest/users" | "guest/interfaces" | "guest/disks" | "guest/fsinfo" | "guest/vcpus" | "guest/exec" | "guest/fstrim" | "snapshot/list" | "snapshot/create" | "snapshot/info" | "snapshot/revert" | "snapshot/delete") @go(Method,type=string)
+	method: ("list" | "info" | "screenshot" | "send-key" | "passwd" | "qmp" | "domain-xml" | "console" | "events" | "guest/ping" | "guest/info" | "guest/os-info" | "guest/time" | "guest/hostname" | "guest/users" | "guest/interfaces" | "guest/disks" | "guest/fsinfo" | "guest/vcpus" | "guest/exec" | "guest/fstrim" | "snapshot/list" | "snapshot/create" | "snapshot/info" | "snapshot/revert" | "snapshot/delete" | "session") @go(Method,type=string)
+	// action — start|stop|status for a session (session). session start begins
+	// capturing the VM framebuffer (libvirt DomainScreenshot) at fps into an MJPEG
+	// stream (the host-side detached recorder); session stop finalizes it to the
+	// evidence row.
+	action?: "start" | "stop" | "status" @go(Action)
+	// fps — the framebuffer capture rate for session (default 5).
+	fps?: int & >=1 @go(Fps,type=int)
 	// text — passwd's new graphics password / qmp's command name.
 	text?: string
 	// input — qmp's optional JSON args blob.
@@ -54,4 +61,19 @@
 	artifact_min_dimensions?:  string & =~"^[0-9]+x[0-9]+$" @go(ArtifactMinDimensions)
 	artifact_not_uniform?:     bool                         @go(ArtifactNotUniform)
 	artifact_min_cast_events?: int & >=0                    @go(ArtifactMinCastEvents,type=int)
+	// session — the DETACHED host-side recorder (Cutover E, E-2): `libvirt: session` starts
+	// the plugin's OWN binary in recorder mode through the runner's generic
+	// background-session service (plugin-check's verb:session seam). The recorder
+	// holds the libvirt RPC itself — the provider stays wire-free — polls the VM
+	// framebuffer (DomainScreenshot) at fps into state_dir/frames.mjpeg, and on
+	// SIGTERM finalizes with the FINAL marker + the evidence row.json. venue/phase
+	// are stamped into the evidence row.
+	session_id?:  string @go(SessionId)
+	state_dir?:   string @go(StateDir)
+	// artifact_dir — the runner-injected generic evidence-artifact dir (verb-agnostic;
+	// the provider appends its own filename/extension).
+	artifact_dir?: string @go(ArtifactDir)
+	log_dir?:     string @go(LogDir)
+	venue?:       string @go(Venue)
+	phase?:       string @go(Phase)
 }

@@ -5,7 +5,9 @@ plugin-vm:
         description: |-
             The VM subsystem relocated into a COMPILED-IN plugin candy (P10). It provides TWO
             capabilities: verb:libvirt — the `libvirt` live check verb (list, info, screenshot,
-            send-key, QMP, qemu-guest-agent, snapshots, events) plus the internal VM-resolution ops
+            send-key, QMP, qemu-guest-agent, snapshots, events, session = the host-side detached libvirt
+            framebuffer recorder over the runner's generic background-session service, Cutover E E-2) plus the
+            internal VM-resolution ops
             (resolve-target / domain-state / list-domains the host's spice/vnc/ssh/status/preempt
             consumers call), dispatched through the provider registry; and command:vm — the
             `charly vm …` lifecycle CLI (build / create / start / stop / destroy / console / ssh /
@@ -36,3 +38,34 @@ plugin-vm:
               id: vm-libvirt-verb-dispatches
               libvirt: list
               context: [runtime]
+            - check: the libvirt session method starts a HOST-side detached framebuffer capture recorder against the live VM (DomainScreenshot polling at fps into MJPEG through the runner's generic background-session service)
+              id: libvirt-session-start
+              libvirt:
+                method: session
+                action: start
+                session_id: ade-libvirt-session
+                fps: 2
+              stdout:
+                - contains: started
+              context:
+                - runtime
+            - check: the libvirt session status reports the detached recorder alive
+              id: libvirt-session-status
+              libvirt:
+                method: session
+                action: status
+                session_id: ade-libvirt-session
+              stdout:
+                - contains: alive=true
+              context:
+                - runtime
+            - check: the libvirt session stop finalizes the detached recorder and its evidence row (frames.mjpeg + row.json)
+              id: libvirt-session-stop
+              libvirt:
+                method: session
+                action: stop
+                session_id: ade-libvirt-session
+              stdout:
+                - contains: stopped
+              context:
+                - runtime

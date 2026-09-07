@@ -9,6 +9,15 @@ type LibvirtVerbInput struct {
 	// verb's PRIMARY input field, so `libvirt: info` desugars to {method: "info"}).
 	Method string `yaml:"method,omitempty" json:"method"`
 
+	// action — start|stop|status for a session (session). session start begins
+	// capturing the VM framebuffer (libvirt DomainScreenshot) at fps into an MJPEG
+	// stream (the host-side detached recorder); session stop finalizes it to the
+	// evidence row.
+	Action string `yaml:"action,omitempty" json:"action,omitempty"`
+
+	// fps — the framebuffer capture rate for session (default 5).
+	Fps int `yaml:"fps,omitempty" json:"fps,omitempty"`
+
 	// text — passwd's new graphics password / qmp's command name.
 	Text string `yaml:"text,omitempty" json:"text,omitempty"`
 
@@ -38,4 +47,25 @@ type LibvirtVerbInput struct {
 	ArtifactNotUniform bool `yaml:"artifact_not_uniform,omitempty" json:"artifact_not_uniform,omitempty"`
 
 	ArtifactMinCastEvents int `yaml:"artifact_min_cast_events,omitempty" json:"artifact_min_cast_events,omitempty"`
+
+	// session — the DETACHED host-side recorder (Cutover E, E-2): `libvirt: session` starts
+	// the plugin's OWN binary in recorder mode through the runner's generic
+	// background-session service (plugin-check's verb:session seam). The recorder
+	// holds the libvirt RPC itself — the provider stays wire-free — polls the VM
+	// framebuffer (DomainScreenshot) at fps into state_dir/frames.mjpeg, and on
+	// SIGTERM finalizes with the FINAL marker + the evidence row.json. venue/phase
+	// are stamped into the evidence row.
+	SessionId string `yaml:"session_id,omitempty" json:"session_id,omitempty"`
+
+	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty"`
+
+	// artifact_dir — the runner-injected generic evidence-artifact dir (verb-agnostic;
+	// the provider appends its own filename/extension).
+	ArtifactDir string `yaml:"artifact_dir,omitempty" json:"artifact_dir,omitempty"`
+
+	LogDir string `yaml:"log_dir,omitempty" json:"log_dir,omitempty"`
+
+	Venue string `yaml:"venue,omitempty" json:"venue,omitempty"`
+
+	Phase string `yaml:"phase,omitempty" json:"phase,omitempty"`
 }
