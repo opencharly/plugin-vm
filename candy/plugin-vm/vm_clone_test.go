@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -222,5 +223,165 @@ func TestDeclaredSnapshotsToCapture(t *testing.T) {
 	none, noneSkipped := declaredSnapshotsToCapture(declared, func(string) error { return fmt.Errorf("missing") })
 	if len(none) != len(declared) || len(noneSkipped) != 0 {
 		t.Fatalf("with no snapshots captured, every declared snapshot must be todo; todo=%+v skipped=%+v", none, noneSkipped)
+	}
+}
+
+// cloneDiskFresh is the idempotent-skip gate behind the from: name:tag drive:
+// a target that ALREADY materializes the resolved snapshot must keep its shared
+// child untouched — rebuilding it is the overlapping-lanes "Failed to get write
+// lock" clobber. The gate is also what makes a re-captured snapshot reach NEW
+// clones while existing clones keep reading the snapshot they were linked to.
+func TestCloneDiskFresh(t *testing.T) {
+	dir := t.TempDir()
+	snap := filepath.Join(dir, "snap.qcow2")
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", snap, "64M").CombinedOutput(); err != nil {
+		t.Fatalf("qemu-img create snap: %v (%s)", err, out)
+	}
+
+	// A missing target is NOT fresh — the first build must create.
+	missing := filepath.Join(dir, "missing.qcow2")
+	if fresh, err := cloneDiskFresh(missing, snap); err != nil || fresh {
+		t.Fatalf("missing overlay: want (false, nil), got (%v, %v)", fresh, err)
+	}
+
+	// A fresh overlay over the snapshot store disk IS fresh (skip the rebuild).
+	clone := filepath.Join(dir, "clone.qcow2")
+	if err := qemuImgCreateOverlay(snap, clone); err != nil {
+		t.Fatalf("create overlay: %v", err)
+	}
+	if fresh, err := cloneDiskFresh(clone, snap); err != nil || !fresh {
+		t.Fatalf("fresh overlay: want (true, nil), got (%v, %v)", fresh, err)
+	}
+
+	// A snapshot RE-CAPTURED after the overlay was created (later mtime at the
+	// same store path) is NOT fresh — new clones must pick up the new content.
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(snap, future, future); err != nil {
+		t.Fatalf("touch snapshot disk: %v", err)
+	}
+	if fresh, err := cloneDiskFresh(clone, snap); err != nil || fresh {
+		t.Fatalf("re-captured snapshot: want (false, nil), got (%v, %v)", fresh, err)
+	}
+
+	// An overlay whose backing is a DIFFERENT disk is never assumed fresh.
+	other := filepath.Join(dir, "other.qcow2")
+	if err := qemuImgCreateOverlay(snap, other); err != nil {
+		t.Fatalf("create other overlay: %v", err)
+	}
+	unrelated := filepath.Join(dir, "unrelated.qcow2")
+	if err := qemuImgCreateOverlay(snap, unrelated); err != nil {
+		t.Fatalf("create unrelated: %v", err)
+	}
+	if fresh, err := cloneDiskFresh(other, unrelated); err != nil || fresh {
+		t.Fatalf("wrong backing: want (false, nil), got (%v, %v)", fresh, err)
+	}
+
+	// A LIVE overlay (guest writes made it newer than the snapshot disk) stays
+	// fresh: the snapshot predates it, so a rebuild would clobber a live disk.
+	older := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(snap, older, older); err != nil {
+		t.Fatalf("backdate snapshot disk: %v", err)
+	}
+	if fresh, err := cloneDiskFresh(clone, snap); err != nil || !fresh {
+		t.Fatalf("live overlay: want (true, nil), got (%v, %v)", fresh, err)
+	}
+}
+
+// TestBuildClone_SecondBuildSkipsOverlayCreate is the race regression gate: two
+// overlapping from: name:tag lanes building the SAME clone entity must NOT both
+// rewrite output/qcow2/<entity>/disk.qcow2 — the second build must skip the
+// overlay create (leaving the shared child untouched) instead of clobbering it
+// into the sibling lane's live domain. The snapshot refcount still goes up per
+// build: every lane holds a live reference until its destroy decrements.
+func TestBuildClone_SecondBuildSkipsOverlayCreate(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv(vmshared.VmStateDirEnv, stateRoot)
+	t.Chdir(t.TempDir())
+
+	// The snapshot store: base-vm's registry + the golden EXTERNAL disk
+	// (snapshots/golden/disk.qcow2 — the SNAPSHOT STORE path the drive resolves
+	// its backing to, never the golden's live output disk).
+	snapPath := filepath.Join(stateRoot, "charly-base-vm", "snapshots", "golden", "disk.qcow2")
+	if err := os.MkdirAll(filepath.Dir(snapPath), 0o755); err != nil {
+		t.Fatalf("mkdir snapshot store: %v", err)
+	}
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", snapPath, "64M").CombinedOutput(); err != nil {
+		t.Fatalf("create golden snapshot disk: %v (%s)", err, out)
+	}
+	reg := &vmshared.SnapshotRegistry{Version: 1, Snapshots: map[string]*vmshared.SnapshotEntry{
+		"golden": {
+			Name: "golden", Mode: "external", LibvirtName: "golden",
+			DiskPath: snapPath, Created: time.Now().UTC().Format(time.RFC3339),
+		},
+	}}
+	data, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	regPath := filepath.Join(stateRoot, "charly-base-vm", "snapshots", "registry.json")
+	if err := os.WriteFile(regPath, data, 0o644); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	s := cloneSpec() // kind=clone, from_vm=base-vm, from_snapshot=golden
+	if err := BuildClone("clone-vm", s, stateRoot, stateRoot); err != nil {
+		t.Fatalf("first BuildClone: %v", err)
+	}
+	disk := filepath.Join("output", "qcow2", "clone-vm", "disk.qcow2")
+	fi1, err := os.Stat(disk)
+	if err != nil {
+		t.Fatalf("stat clone disk: %v", err)
+	}
+	// The overlay must back onto the SNAPSHOT STORE disk (read-only), never the
+	// golden's live output disk.
+	info, err := exec.Command("qemu-img", "info", "--output=json", disk).Output()
+	if err != nil {
+		t.Fatalf("qemu-img info clone disk: %v", err)
+	}
+	var infoParsed struct {
+		FullBacking string `json:"full-backing-filename"`
+	}
+	if err := json.Unmarshal(info, &infoParsed); err != nil {
+		t.Fatalf("parse qemu-img info: %v", err)
+	}
+	if filepath.Clean(infoParsed.FullBacking) != filepath.Clean(snapPath) {
+		t.Fatalf("clone overlay must back onto the snapshot store disk %s; got %q", snapPath, infoParsed.FullBacking)
+	}
+
+	// Second build (the overlapping lane): must SKIP the overlay create — the
+	// file must be byte-touch-identical, so a rewrite (mtime change) is a fail.
+	time.Sleep(1100 * time.Millisecond) // a rewrite would visibly change mtime
+	if err := BuildClone("clone-vm", s, stateRoot, stateRoot); err != nil {
+		t.Fatalf("second BuildClone: %v", err)
+	}
+	fi2, err := os.Stat(disk)
+	if err != nil {
+		t.Fatalf("stat clone disk after second build: %v", err)
+	}
+	if !fi2.ModTime().Equal(fi1.ModTime()) {
+		t.Fatalf("second build REWROTE the shared clone overlay (mtime %v -> %v) — the overlapping-lanes race", fi1.ModTime(), fi2.ModTime())
+	}
+
+	// Refcount: every build (lane) holds a reference on the snapshot; deletion
+	// must refuse while ANY clone depends on it.
+	entry, err := vmshared.LookupSnapshot("base-vm", "golden")
+	if err != nil {
+		t.Fatalf("lookup snapshot: %v", err)
+	}
+	if entry.Refcount != 2 {
+		t.Fatalf("two builds must hold refcount 2 (delete refuses while > 0); got %d", entry.Refcount)
+	}
+	if err := vmshared.DeleteSnapshot(vmshared.SnapshotDeleteOpts{VmName: "base-vm", SnapName: "golden"}); err == nil {
+		t.Fatal("snapshot deletion must refuse while the clones reference it")
+	}
+	// After both lanes tear down, the snapshot is deletable again.
+	if err := vmshared.DecrementSnapshotRefcount("base-vm", "golden"); err != nil {
+		t.Fatalf("decrement 1: %v", err)
+	}
+	if err := vmshared.DecrementSnapshotRefcount("base-vm", "golden"); err != nil {
+		t.Fatalf("decrement 2: %v", err)
+	}
+	if err := vmshared.DeleteSnapshot(vmshared.SnapshotDeleteOpts{VmName: "base-vm", SnapName: "golden"}); err != nil {
+		t.Fatalf("snapshot must be deletable once the last clone is gone: %v", err)
 	}
 }
