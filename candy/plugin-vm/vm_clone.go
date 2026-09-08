@@ -80,6 +80,94 @@ func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
 	return "", nil
 }
 
+// cloneDiskFresh reports whether the target clone overlay at clonePath ALREADY
+// materializes the resolved snapshot: it exists, its backing file is exactly
+// snapshotDisk — the SNAPSHOT STORE disk (~/.local/share/charly/vm/charly-
+// <fromVm>/snapshots/<tag>/disk.qcow2), never the golden's live
+// output/qcow2/<fromVm>/disk.qcow2 — and the snapshot disk was NOT re-captured
+// after the overlay was created.
+//
+// Freshness semantics (the shared-link contract):
+//   - A fresh overlay is the SHARED per-entity child every lane's per-domain
+//     boot overlays onto READ-ONLY. Rebuilding it would clobber a disk a
+//     concurrent lane's live domain has open read-write — the overlapping-lanes
+//     race (qemu-img: .../disk.qcow2: Failed to get "write" lock when
+//     `vm build <entity> --from-snapshot <tag>` runs against the same
+//     output/qcow2/<entity>/disk.qcow2 while the sibling lane's VM is live).
+//     The skip is the clone arm of the idempotent-skip discipline every other
+//     source-kind build already has (BuildCloudImage's diskBaseFresh; the
+//     vm_build.go Force doc: "the concurrent-bed R10 uses idempotent-skip,
+//     never --force").
+//   - A snapshot RE-CAPTURED after the overlay was created (new disk at the
+//     same store path, newer mtime) is NOT fresh: the re-capture must reach
+//     NEW clones only. Existing clones keep reading the snapshot they were
+//     linked to at overlay-create — the snapshot refcount keeps that disk
+//     alive (delete refuses while refcount > 0), so re-capture + deletion of
+//     the linked snapshot can only ever happen after the last clone is gone.
+//
+// The probe never opens either file for write (-U on the overlay so a live
+// domain's disk stays inspectable; the snapshot disk is only stat'ed). Errors
+// probing are returned loud — a broken target must fail the build, never be
+// silently overwritten.
+func cloneDiskFresh(clonePath, snapshotDisk string) (bool, error) {
+	ci, err := os.Stat(clonePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil // nothing materialized yet — must create
+		}
+		return false, fmt.Errorf("stat clone disk %s: %w", clonePath, err)
+	}
+	out, err := exec.Command("qemu-img", "info", "-U", "--output=json", clonePath).Output()
+	if err != nil {
+		return false, fmt.Errorf("probing clone disk %s: %w", clonePath, err)
+	}
+	var info struct {
+		BackingFile string `json:"backing-filename"`
+		FullBacking string `json:"full-backing-filename"`
+	}
+	if err := json.Unmarshal(out, &info); err != nil {
+		return false, fmt.Errorf("parsing clone disk info %s: %w", clonePath, err)
+	}
+	// qemu-img emits the RELATIVE name as backing-filename and the ABSOLUTE as
+	// full-backing-filename (the same probe diskIsGoldenClone uses).
+	backing := info.FullBacking
+	if backing == "" {
+		backing = info.BackingFile
+	}
+	if backing == "" || !sameAbsPath(backing, snapshotDisk) {
+		// No backing at all (not a clone overlay) or a backing that is NOT the
+		// resolved snapshot store disk — never assume, rebuild.
+		return false, nil
+	}
+	si, err := os.Stat(snapshotDisk)
+	if err != nil {
+		// The snapshot disk is gone (deleted under the overlay): the overlay is
+		// dangling — rebuild, which then fails loudly on the missing backing
+		// (re-capture required) instead of booting a broken clone.
+		return false, nil
+	}
+	// Re-capture lands at the SAME store path with a new file. Compare mtimes
+	// with the same second-precision convention snapshotBackingStale uses
+	// (capture-finalization writes can land sub-second after the registry's
+	// Created timestamp, so a same-second write must stay fresh).
+	if si.ModTime().Truncate(time.Second).After(ci.ModTime().Truncate(time.Second)) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// sameAbsPath reports whether two paths name the same file after resolution
+// against cwd (qemu-img stores the backing RELATIVELY when the create was
+// invoked with a relative path, ABSOLUTELY otherwise).
+func sameAbsPath(a, b string) bool {
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return filepath.Clean(aa) == filepath.Clean(bb)
+}
+
 // BuildClone is the source.kind == "clone" build path.
 //
 // vmName is the new VM (the clone target). spec is its VmSpec
@@ -129,13 +217,33 @@ func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 			vmName, spec.Source.FromVm, spec.Source.FromSnapshot, stale, parentEntry.Created)
 	}
 
-	// Materialize the clone overlay using the existing primitive.
+	// Materialize the clone overlay using the existing primitive. The overlay is
+	// the SHARED-LINK child: it backs read-only onto the SNAPSHOT STORE disk
+	// (snapshots/<tag>/disk.qcow2 — resolved above via LookupSnapshot, never the
+	// golden's live output disk), and every per-domain boot overlays ONTO it.
+	// Idempotent skip (the clone arm of the concurrent-bed discipline): when the
+	// target already materializes this snapshot, leave it untouched — rebuilding
+	// it clobbers a disk a concurrent lane's live domain has open read-write
+	// (Failed to get "write" lock on overlapping from: name:tag lanes). The
+	// snapshot refcount bumped below counts THIS lane's reference; the snapshot
+	// stays undeletable (delete refuses while refcount > 0) until every clone is
+	// gone, and a re-capture only ever affects clones built after it (a STALE
+	// target here is rebuilt, picking up the re-captured snapshot).
 	clonePath := filepath.Join(vmDiskDir(vmName), "disk.qcow2")
 	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
-	if err := qemuImgCreateOverlay(parentEntry.DiskPath, clonePath); err != nil {
-		return fmt.Errorf("clone overlay create: %w", err)
+	fresh, ferr := cloneDiskFresh(clonePath, parentEntry.DiskPath)
+	if ferr != nil {
+		return fmt.Errorf("clone overlay freshness probe: %w", ferr)
+	}
+	if fresh {
+		fmt.Fprintf(os.Stderr, "Clone disk %s already materializes snapshot %s@%s (backing %s) — skipping overlay create\n",
+			clonePath, spec.Source.FromVm, spec.Source.FromSnapshot, parentEntry.DiskPath)
+	} else {
+		if err := qemuImgCreateOverlay(parentEntry.DiskPath, clonePath); err != nil {
+			return fmt.Errorf("clone overlay create: %w", err)
+		}
 	}
 
 	// Increment the parent snapshot's refcount. The decrement happens
