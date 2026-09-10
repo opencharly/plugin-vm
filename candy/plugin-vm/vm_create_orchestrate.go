@@ -75,7 +75,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// Locate the built BASE disk in the ENTITY's shared per-entity dir. A deploy boots a per-domain
 	// copy-on-write OVERLAY of it (so N beds sharing one entity never write the same qcow2 — the
 	// P33 disk isolation); a direct create (domainID == entity) boots the base directly (unchanged).
-	baseQcow2 := filepath.Join(vmDiskDir(entityLeaf(entity)), "disk.qcow2")
+	baseQcow2 := baseDiskPath(entity)
 	if _, err := os.Stat(baseQcow2); err != nil {
 		return fmt.Errorf("disk.qcow2 not found at %s — run `charly vm build %s` first", baseQcow2, entity)
 	}

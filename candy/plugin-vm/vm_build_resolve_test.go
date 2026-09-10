@@ -2,6 +2,7 @@ package vm
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/opencharly/sdk/loaderkit"
@@ -108,5 +109,19 @@ func TestApplyCloneDriveSource_Qualified(t *testing.T) {
 	if vs.Source.Kind != "clone" || vs.Source.FromVm != "check-charly-omarchy-vm" || vs.Source.FromSnapshot != "golden" {
 		t.Errorf("drive source = kind=%q from_vm=%q from_snapshot=%q, want clone/check-charly-omarchy-vm/golden",
 			vs.Source.Kind, vs.Source.FromVm, vs.Source.FromSnapshot)
+	}
+}
+
+// TestBaseDiskPath gates the vm-create base-disk path: a namespace-qualified
+// ref keys the entity dir by the LEAF (the vm-build clone drive writes the
+// disk there). This test FAILS without the leaf-stripping in baseDiskPath.
+func TestBaseDiskPath(t *testing.T) {
+	got := baseDiskPath("omarchy.check-charly-omarchy-vm")
+	want := filepath.Join(vmDiskDir("check-charly-omarchy-vm"), "disk.qcow2")
+	if got != want {
+		t.Fatalf("baseDiskPath(qualified) = %q, want %q (the leaf-keyed path)", got, want)
+	}
+	if got := baseDiskPath("check-omarchy-eval-base-inst"); got != filepath.Join(vmDiskDir("check-omarchy-eval-base-inst"), "disk.qcow2") {
+		t.Fatalf("baseDiskPath(local) = %q, want the unchanged local path", got)
 	}
 }

@@ -466,3 +466,10 @@ func resolveVmBuildIsoDistro(ctx context.Context, ex *sdk.Executor, dir string, 
 	reply.DistroJSON = distroJSON
 	return nil
 }
+
+// baseDiskPath returns the built base disk path for an entity — the LEAF of a
+// namespace-qualified ref (the vm-build clone drive writes the disk under the
+// name as authored in the owning repo).
+func baseDiskPath(entity string) string {
+	return filepath.Join(vmDiskDir(entityLeaf(entity)), "disk.qcow2")
+}
