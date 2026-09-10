@@ -436,7 +436,7 @@ func seedPathFor(box, domain, instance string) (string, error) {
 		}
 		return p, nil
 	}
-	p := filepath.Join(vmDiskDir(box), "seed.iso")
+	p := filepath.Join(vmDiskDir(entityLeaf(box)), "seed.iso")
 	if _, err := os.Stat(p); err != nil {
 		return "", fmt.Errorf("no answers volume at %s — has `charly vm build %s` run?", p, box)
 	}
