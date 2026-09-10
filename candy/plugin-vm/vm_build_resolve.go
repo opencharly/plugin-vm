@@ -131,7 +131,11 @@ func resolveVmBuildEntity(ctx context.Context, ex *sdk.Executor, dir, boxName st
 	if err != nil || !ok || uf.VM() == nil {
 		return nil, noVmEntityErr(boxName)
 	}
-	body, hit := uf.VM()[boxName]
+	// The canonical namespace-aware body lookup (loaderkit ResolveKindEntityBody
+	// — the runtime counterpart of ResolveEntityRef): a local OR
+	// namespace-qualified (ns.entity, a git-linked import ref) vm template
+	// resolves here. The former local-only uf.VM() lookup is retired.
+	body, hit := loaderkit.ResolveKindEntityBody(uf, "vm", boxName)
 	if !hit {
 		return nil, noVmEntityErr(boxName)
 	}
