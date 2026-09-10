@@ -4,6 +4,8 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 
 	libvirt "github.com/digitalocean/go-libvirt"
@@ -150,6 +152,57 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 		return err
 	}
 	return nil
+}
+
+// isSnapshotDisk reports whether a disk path lives in a snapshot store
+// (snapshots/<tag>/disk.qcow2) — the snapshot-anchored active-disk case, where
+// the SAME file is the keeper's active disk (needs writable) AND the clones'
+// backing (needs 0444 for shared locks).
+func isSnapshotDisk(path string) bool {
+	return strings.Contains(path, string(filepath.Separator)+"snapshots"+string(filepath.Separator))
+}
+
+// firstDiskSourceFile returns the first <disk device='disk'> source file from
+// the domain XML — the VM's active disk path. Mirrors firstDiskTargetDev's
+// parse shape.
+func firstDiskSourceFile(domainXML string) (string, error) {
+	var dom struct {
+		Devices struct {
+			Disks []struct {
+				Device string `xml:"device,attr"`
+				Source struct {
+					File string `xml:"file,attr"`
+				} `xml:"source"`
+			} `xml:"disk"`
+		} `xml:"devices"`
+	}
+	if err := xml.Unmarshal([]byte(domainXML), &dom); err != nil {
+		return "", fmt.Errorf("parsing domain XML: %w", err)
+	}
+	for _, d := range dom.Devices.Disks {
+		if d.Device == "disk" && d.Source.File != "" {
+			return d.Source.File, nil
+		}
+	}
+	return "", fmt.Errorf("no <disk device='disk'><source file=/></disk> in domain XML")
+}
+
+// withSnapshotWritable runs fn with a snapshot-anchored active disk chmodded
+// writable (0644) and restores it to 0444 (the shared-clone default) after —
+// the keeper-restart dance. qemu opens the ACTIVE disk read-write, so a 0444
+// active disk fails to start with EACCES; the open fd is unaffected by the
+// chmod, so the keeper keeps its writable fd while clones still get shared
+// locks. The restore is best-effort (a failure is a warning, never a start
+// failure).
+func withSnapshotWritable(path string, fn func() error) error {
+	if err := makeSnapshotWritable(path); err != nil {
+		return err
+	}
+	err := fn()
+	if rerr := makeSnapshotReadOnly(path); rerr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: restoring snapshot %s read-only: %v\n", path, rerr)
+	}
+	return err
 }
 
 // makeSnapshotWritable chmods a snapshot disk to 0644 so a re-capture can

@@ -210,6 +210,17 @@ func (c *libvirtConn) undefineDomain(dom libvirt.Domain, _ bool) error {
 	return c.l.DomainUndefineFlags(dom, libvirt.DomainUndefineNvram|libvirt.DomainUndefineManagedSave)
 }
 
+// activeDiskPath returns the VM's active disk path (the first
+// <disk device='disk'> source file) from the domain XML. Used by the start op
+// to chmod a snapshot-anchored active disk writable before qemu opens it.
+func (c *libvirtConn) activeDiskPath(dom libvirt.Domain) (string, error) {
+	xmlStr, err := c.l.DomainGetXMLDesc(dom, 0)
+	if err != nil {
+		return "", fmt.Errorf("reading domain XML: %w", err)
+	}
+	return firstDiskSourceFile(xmlStr)
+}
+
 // defineAndStartDomain defines a domain from XML and starts it.
 // Between define and start, pre-creates any missing parent dirs for
 // <listen type='socket'/> sockets (libvirt 12.x Arch bug — see

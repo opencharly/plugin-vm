@@ -367,7 +367,20 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 			if s, serr := conn.domainState(dom); serr == nil && s == libvirt.DomainRunning {
 				return internalJSON(map[string]any{"ok": true, "already_running": true})
 			}
-			err = conn.startDomain(dom)
+			// SNAPSHOT-ANCHORED ACTIVE DISK (R1, the keeper-restart regression): a
+			// snapshot-anchored keeper runs ON its golden snapshot as the ACTIVE disk.
+			// The shared-clone default chmods the snapshot 0444 at capture (so parallel
+			// clones open it read-only with shared locks), but qemu opens the ACTIVE
+			// disk read-write — a 0444 active disk fails to start with EACCES. Chmod
+			// the active disk writable BEFORE qemu opens it, then back to 0444 AFTER
+			// the domain starts (the open fd is unaffected by the chmod, so the keeper
+			// keeps its writable fd while clones still get shared locks).
+			diskPath, _ := conn.activeDiskPath(dom)
+			if isSnapshotDisk(diskPath) {
+				err = withSnapshotWritable(diskPath, func() error { return conn.startDomain(dom) })
+			} else {
+				err = conn.startDomain(dom)
+			}
 		case "stop":
 			if env.Force {
 				_ = conn.destroyDomain(dom) //nolint:errcheck
