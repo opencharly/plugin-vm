@@ -56,8 +56,23 @@ func vmBuildDriveSourceKind(entityKind string, req spec.VmBuildRequest) string {
 // unit gate — the runnable seam the vm-build step threads).
 func applyCloneDriveSource(vmSpec *VmSpec, box, snapshot string) {
 	vmSpec.Source.Kind = "clone"
-	vmSpec.Source.FromVm = box
+	// The snapshot registry + disk paths + domain lookup are keyed on the
+	// ENTITY name — for a namespace-qualified ref (ns.entity, a git-linked
+	// import), the entity name is the LEAF (the name as authored in the owning
+	// repo). The qualified ref is the cross-repo reference; the leaf is the
+	// registry key.
+	vmSpec.Source.FromVm = entityLeaf(box)
 	vmSpec.Source.FromSnapshot = snapshot
+}
+
+// entityLeaf strips the namespace prefix from a qualified ref (ns.entity →
+// entity). Entity names are dot-free by contract, so the leaf is the part
+// after the LAST dot; an unqualified name is its own leaf.
+func entityLeaf(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // resolveVmBuildViaDeployFrom hops a from: name:tag DRIVE target through the deploy map:

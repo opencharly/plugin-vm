@@ -140,16 +140,17 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		// the deploy's snapshot (req.FromSnapshot — resolveVmBuild set reply.SourceKind
 		// to "clone", the DRIVE, when the request carries from_snapshot). BuildClone
 		// requires source.kind == clone + FromVm + FromSnapshot; set them from the drive.
-		applyCloneDriveSource(&vmSpec, box, req.FromSnapshot)
-		if err := BuildClone(box, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
+		entity := entityLeaf(box)
+		applyCloneDriveSource(&vmSpec, entity, req.FromSnapshot)
+		if err := BuildClone(entity, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (clone of %s@%s)\n",
-			filepath.Join(vmDiskDir(box), "disk.qcow2"), box, req.FromSnapshot)
+			filepath.Join(vmDiskDir(entity), "disk.qcow2"), entity, req.FromSnapshot)
 		if vmSpec.CloudInit != nil || vmSpec.SSH != nil {
-			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(vmDiskDir(box), "seed.iso"))
+			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(vmDiskDir(entity), "seed.iso"))
 		}
-		builtDisk = filepath.Join(vmDiskDir(box), "disk.qcow2")
+		builtDisk = filepath.Join(vmDiskDir(entity), "disk.qcow2")
 
 	default:
 		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))
