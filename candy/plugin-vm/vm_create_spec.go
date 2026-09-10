@@ -25,6 +25,18 @@ func consoleHint(entity, domainID string) string {
 // domain XML, define+start it, apply autostart + raw snippets, and publish the
 // managed ssh-config alias.
 func runVmSpecCreateLibvirt(spec *VmSpec, rt VmRuntimeParams, vmDomainName, home, vmName, name string) error {
+	// SNAPSHOT-ANCHORED ACTIVE DISK (R1, the keeper-restart regression): a
+	// snapshot-anchored keeper runs ON its golden snapshot as the ACTIVE disk.
+	// The shared-clone default chmods the snapshot 0444 at capture (so parallel
+	// clones open it read-only with shared locks), but qemu opens the ACTIVE
+	// disk read-write — a 0444 active disk fails to start with EACCES. Chmod
+	// the active disk writable BEFORE qemu opens it, then back to 0444 AFTER
+	// the domain starts (the open fd is unaffected by the chmod).
+	if isSnapshotDisk(rt.QCOW2Path) {
+		if werr := makeSnapshotWritable(rt.QCOW2Path); werr != nil {
+			return fmt.Errorf("creating VM %s: making the snapshot-anchored active disk writable: %w", vmDomainName, werr)
+		}
+	}
 	xmlStr, err := RenderDomainXML(spec, rt)
 	if err != nil {
 		return fmt.Errorf("rendering domain XML for %s: %w", vmDomainName, err)
@@ -36,6 +48,11 @@ func runVmSpecCreateLibvirt(spec *VmSpec, rt VmRuntimeParams, vmDomainName, home
 	defer conn.Close() //nolint:errcheck
 	if err := conn.defineAndStartDomain(xmlStr, vmDomainName); err != nil {
 		return fmt.Errorf("creating VM %s: %w", vmDomainName, err)
+	}
+	if isSnapshotDisk(rt.QCOW2Path) {
+		if rerr := makeSnapshotReadOnly(rt.QCOW2Path); rerr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: restoring snapshot %s read-only: %v\n", rt.QCOW2Path, rerr)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "Created VM %s (libvirt session)\n", vmDomainName)
 
