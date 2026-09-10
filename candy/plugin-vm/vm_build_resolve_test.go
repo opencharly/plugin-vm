@@ -56,3 +56,27 @@ func TestVmBuildDeployFromHop_Qualified(t *testing.T) {
 		t.Fatal("unqualified namespace bed leaked into the local scope")
 	}
 }
+
+// TestResolveKindEntityBody_Qualified gates the CHANGED LINE directly:
+// resolveVmBuildEntity's body lookup is loaderkit.ResolveKindEntityBody(uf,
+// "vm", boxName) — a namespace-qualified box name (ns.entity) must resolve the
+// namespace's own template body. This test FAILS without the namespace-aware
+// ResolveKindEntityBody (sdk #247).
+func TestResolveKindEntityBody_Qualified(t *testing.T) {
+	ns := &spec.UnifiedFile{
+		PluginKinds: map[string]map[string]json.RawMessage{
+			"vm": {"omarchy-vm": json.RawMessage("{}")},
+		},
+	}
+	uf := &spec.UnifiedFile{
+		Namespaces: map[string]*spec.UnifiedFile{"omarchy": ns},
+	}
+	body, ok := loaderkit.ResolveKindEntityBody(uf, "vm", "omarchy.omarchy-vm")
+	if !ok || len(body) == 0 {
+		t.Fatal("ResolveKindEntityBody(omarchy.omarchy-vm) did not resolve the namespace template body")
+	}
+	// The unqualified form stays local-only (the no-leak contract).
+	if _, ok := loaderkit.ResolveKindEntityBody(uf, "vm", "omarchy-vm"); ok {
+		t.Fatal("unqualified namespace body leaked into the local scope")
+	}
+}
