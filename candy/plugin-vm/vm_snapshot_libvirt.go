@@ -187,6 +187,24 @@ func firstDiskSourceFile(domainXML string) (string, error) {
 	return "", fmt.Errorf("no <disk device='disk'><source file=/></disk> in domain XML")
 }
 
+// withSnapshotWritable runs fn with a snapshot-anchored active disk chmodded
+// writable (0644) and restores it to 0444 (the shared-clone default) after —
+// the keeper-restart dance. qemu opens the ACTIVE disk read-write, so a 0444
+// active disk fails to start with EACCES; the open fd is unaffected by the
+// chmod, so the keeper keeps its writable fd while clones still get shared
+// locks. The restore is best-effort (a failure is a warning, never a start
+// failure).
+func withSnapshotWritable(path string, fn func() error) error {
+	if err := makeSnapshotWritable(path); err != nil {
+		return err
+	}
+	err := fn()
+	if rerr := makeSnapshotReadOnly(path); rerr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: restoring snapshot %s read-only: %v\n", path, rerr)
+	}
+	return err
+}
+
 // makeSnapshotWritable chmods a snapshot disk to 0644 so a re-capture can
 // overwrite it. Best-effort for a not-yet-existing file (first capture).
 func makeSnapshotWritable(path string) error {

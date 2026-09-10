@@ -377,15 +377,9 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 			// keeps its writable fd while clones still get shared locks).
 			diskPath, _ := conn.activeDiskPath(dom)
 			if isSnapshotDisk(diskPath) {
-				if werr := makeSnapshotWritable(diskPath); werr != nil {
-					return internalJSON(map[string]any{"error": werr.Error()})
-				}
-			}
-			err = conn.startDomain(dom)
-			if err == nil && isSnapshotDisk(diskPath) {
-				if rerr := makeSnapshotReadOnly(diskPath); rerr != nil {
-					fmt.Fprintf(os.Stderr, "Warning: restoring snapshot %s read-only: %v\n", diskPath, rerr)
-				}
+				err = withSnapshotWritable(diskPath, func() error { return conn.startDomain(dom) })
+			} else {
+				err = conn.startDomain(dom)
 			}
 		case "stop":
 			if env.Force {

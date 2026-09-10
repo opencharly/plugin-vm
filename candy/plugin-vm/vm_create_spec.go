@@ -33,10 +33,20 @@ func runVmSpecCreateLibvirt(spec *VmSpec, rt VmRuntimeParams, vmDomainName, home
 	// the active disk writable BEFORE qemu opens it, then back to 0444 AFTER
 	// the domain starts (the open fd is unaffected by the chmod).
 	if isSnapshotDisk(rt.QCOW2Path) {
-		if werr := makeSnapshotWritable(rt.QCOW2Path); werr != nil {
-			return fmt.Errorf("creating VM %s: making the snapshot-anchored active disk writable: %w", vmDomainName, werr)
+		if werr := withSnapshotWritable(rt.QCOW2Path, func() error {
+			return runVmSpecCreateLibvirtInner(spec, rt, vmDomainName, home, vmName, name)
+		}); werr != nil {
+			return werr
 		}
+		return nil
 	}
+	return runVmSpecCreateLibvirtInner(spec, rt, vmDomainName, home, vmName, name)
+}
+
+// runVmSpecCreateLibvirtInner is the create body WITHOUT the snapshot-anchored
+// chmod dance — withSnapshotWritable wraps it so the active disk is writable
+// while qemu opens it and restored to 0444 after.
+func runVmSpecCreateLibvirtInner(spec *VmSpec, rt VmRuntimeParams, vmDomainName, home, vmName, name string) error {
 	xmlStr, err := RenderDomainXML(spec, rt)
 	if err != nil {
 		return fmt.Errorf("rendering domain XML for %s: %w", vmDomainName, err)
@@ -48,11 +58,6 @@ func runVmSpecCreateLibvirt(spec *VmSpec, rt VmRuntimeParams, vmDomainName, home
 	defer conn.Close() //nolint:errcheck
 	if err := conn.defineAndStartDomain(xmlStr, vmDomainName); err != nil {
 		return fmt.Errorf("creating VM %s: %w", vmDomainName, err)
-	}
-	if isSnapshotDisk(rt.QCOW2Path) {
-		if rerr := makeSnapshotReadOnly(rt.QCOW2Path); rerr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: restoring snapshot %s read-only: %v\n", rt.QCOW2Path, rerr)
-		}
 	}
 	fmt.Fprintf(os.Stderr, "Created VM %s (libvirt session)\n", vmDomainName)
 
