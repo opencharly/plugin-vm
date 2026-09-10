@@ -80,3 +80,33 @@ func TestResolveKindEntityBody_Qualified(t *testing.T) {
 		t.Fatal("unqualified namespace body leaked into the local scope")
 	}
 }
+
+// TestEntityLeaf gates the leaf-stripping for the clone drive: a
+// namespace-qualified ref (ns.entity) keys the snapshot registry + disk paths
+// by the LEAF (the name as authored in the owning repo); an unqualified name
+// is its own leaf.
+func TestEntityLeaf(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"omarchy.check-charly-omarchy-vm", "check-charly-omarchy-vm"},
+		{"omarchy.omarchy-vm", "omarchy-vm"},
+		{"check-omarchy-eval-base-inst", "check-omarchy-eval-base-inst"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := entityLeaf(c.in); got != c.want {
+			t.Fatalf("entityLeaf(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestApplyCloneDriveSource_Qualified gates the clone drive's leaf wiring: the
+// drive's FromVm is the LEAF of a namespace-qualified ref (the snapshot
+// registry key), not the qualified ref itself.
+func TestApplyCloneDriveSource_Qualified(t *testing.T) {
+	vs := &VmSpec{}
+	applyCloneDriveSource(vs, "omarchy.check-charly-omarchy-vm", "golden")
+	if vs.Source.Kind != "clone" || vs.Source.FromVm != "check-charly-omarchy-vm" || vs.Source.FromSnapshot != "golden" {
+		t.Errorf("drive source = kind=%q from_vm=%q from_snapshot=%q, want clone/check-charly-omarchy-vm/golden",
+			vs.Source.Kind, vs.Source.FromVm, vs.Source.FromSnapshot)
+	}
+}
