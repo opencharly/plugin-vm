@@ -15,7 +15,7 @@ import (
 // or a QEMU process (via RenderQemuArgv + exec) depending on the
 // resolved backend. Pre-conditions: `charly vm build <vm-name>` has run,
 // placing disk.qcow2 (+ seed.iso for cloud_image sources) under the per-VM
-// disk dir output/qcow2/<vm>/.
+// disk dir <vm.image_dir>/<vm>/.
 //
 //nolint:gocyclo // flat sequential vm-create orchestration; extraction relocates, not clarifies
 func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend string, claimantNode *DeployNode, resources map[string]*ResolvedResource, vmState *VmDeployState) error {

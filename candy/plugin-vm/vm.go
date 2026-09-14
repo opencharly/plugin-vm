@@ -210,7 +210,7 @@ func (c *VmCreateCmd) Run() error {
 
 	if reply.VM != nil {
 		// VmSpec-driven create pipeline: RenderDomain for libvirt, RenderQemuArgv for qemu. Uses
-		// output/qcow2/{disk,seed} produced by `charly vm build`. claimantNode + resources drive GPU
+		// <vm.image_dir>/{disk,seed} produced by `charly vm build`. claimantNode + resources drive GPU
 		// auto-allocation (gpu_allocate.go).
 		return c.runVmSpecCreate(c.Box, reply.VM, reply.Backend, reply.ClaimantNode, reply.Resources, reply.VmState)
 	}

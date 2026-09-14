@@ -84,7 +84,7 @@ func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
 // materializes the resolved snapshot: it exists, its backing file is exactly
 // snapshotDisk — the SNAPSHOT STORE disk (~/.local/share/charly/vm/charly-
 // <fromVm>/snapshots/<tag>/disk.qcow2), never the golden's live
-// output/qcow2/<fromVm>/disk.qcow2 — and the snapshot disk was NOT re-captured
+// <vm.image_dir>/<fromVm>/disk.qcow2 — and the snapshot disk was NOT re-captured
 // after the overlay was created.
 //
 // Freshness semantics (the shared-link contract):
@@ -93,7 +93,7 @@ func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
 //     concurrent lane's live domain has open read-write — the overlapping-lanes
 //     race (qemu-img: .../disk.qcow2: Failed to get "write" lock when
 //     `vm build <entity> --from-snapshot <tag>` runs against the same
-//     output/qcow2/<entity>/disk.qcow2 while the sibling lane's VM is live).
+//     <vm.image_dir>/<entity>/disk.qcow2 while the sibling lane's VM is live).
 //     The skip is the clone arm of the idempotent-skip discipline every other
 //     source-kind build already has (BuildCloudImage's diskBaseFresh; the
 //     vm_build.go Force doc: "the concurrent-bed R10 uses idempotent-skip,
@@ -172,7 +172,7 @@ func sameAbsPath(a, b string) bool {
 //
 // vmName is the new VM (the clone target). spec is its VmSpec
 // (source.from_vm and source.from_snapshot fully populated). outputDir
-// is where output/qcow2/disk.qcow2 + output/qcow2/seed.iso will be
+// is where <vm.image_dir>/disk.qcow2 + <vm.image_dir>/seed.iso will be
 // written, mirroring the cloud_image build path's conventions.
 func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	if spec.Source.Kind != "clone" {

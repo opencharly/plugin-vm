@@ -50,13 +50,19 @@ func TestParseDiskSizeBytes(t *testing.T) {
 // or creating one VM never reuses a sibling VM's disk or (critically) its stale
 // seed.iso — the regression that made `charly vm create cachyos-gpu` adopt the
 // bed VM's seed (whose embedded SSH key mismatched cachyos-gpu's id_ed25519).
+//
+// The ROOT is configurable (vm.image_dir / CHARLY_VM_IMAGE_DIR, default "image");
+// this asserts the DEFAULT root — the resolver's own precedence is covered by
+// TestVmDiskRoot_Configurable in the sdk module.
 func TestVmDiskDir_PerVM(t *testing.T) {
+	t.Setenv("CHARLY_VM_IMAGE_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	coder := vmshared.VmDiskDir("cachyos-gpu")
 	bed := vmshared.VmDiskDir("cachyos-gpu-vm")
 	if coder == bed {
 		t.Fatalf("vmshared.VmDiskDir must be per-VM; got identical paths for two VMs: %s", coder)
 	}
-	want := filepath.Join("output", "qcow2", "cachyos-gpu")
+	want := filepath.Join("image", "cachyos-gpu")
 	if coder != want {
 		t.Errorf("vmshared.VmDiskDir(cachyos-gpu) = %q, want %q", coder, want)
 	}

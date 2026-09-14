@@ -69,7 +69,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 	fmt.Fprintf(os.Stderr, "Building VM %q (source.kind=%s)\n", box, reply.SourceKind)
 
 	// Per-ENTITY build flock: serialize concurrent `vm build <entity>` so N beds sharing this
-	// entity's disk base never race on output/qcow2/<entity>/ (and a second build never
+	// entity's disk base never race on <vm.image_dir>/<entity>/ (and a second build never
 	// rewrites a base a live per-domain overlay backs onto). Blocking — the first builds, the
 	// rest wait then idempotent-skip. Released on return (BEFORE `vm create`), so per-domain
 	// overlay-creates stay unserialized.

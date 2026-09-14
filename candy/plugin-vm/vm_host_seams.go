@@ -106,7 +106,7 @@ func hostConfigResolve(entity string) (resolvedConfig, error) {
 			// (the clone-base deploy) whose from: names the terminal template — the ONE
 			// chain resolver (loaderkit.DeployTargetEntity) handles the plain-entity and
 			// deploy-hop cases alike. The DISK/domain keying below stays on c.Box (the
-			// requested name — where the vm-build drive wrote output/qcow2/<box>/); only the
+			// requested name — where the vm-build drive wrote <vm.image_dir>/<box>/); only the
 			// SPEC resolve follows the chain.
 			target, ok := loaderkit.DeployTargetEntity(uf, entity)
 			if ok {
