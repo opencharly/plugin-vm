@@ -57,8 +57,14 @@ func TestParseDiskSizeBytes(t *testing.T) {
 func TestVmDiskDir_PerVM(t *testing.T) {
 	t.Setenv("CHARLY_VM_IMAGE_DIR", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	coder := vmshared.VmDiskDir("cachyos-gpu")
-	bed := vmshared.VmDiskDir("cachyos-gpu-vm")
+	coder, err := vmshared.VmDiskDir("cachyos-gpu")
+	if err != nil {
+		t.Fatalf("vmshared.VmDiskDir: %v", err)
+	}
+	bed, err := vmshared.VmDiskDir("cachyos-gpu-vm")
+	if err != nil {
+		t.Fatalf("vmshared.VmDiskDir: %v", err)
+	}
 	if coder == bed {
 		t.Fatalf("vmshared.VmDiskDir must be per-VM; got identical paths for two VMs: %s", coder)
 	}

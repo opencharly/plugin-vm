@@ -75,7 +75,10 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// Locate the built BASE disk in the ENTITY's shared per-entity dir. A deploy boots a per-domain
 	// copy-on-write OVERLAY of it (so N beds sharing one entity never write the same qcow2 — the
 	// P33 disk isolation); a direct create (domainID == entity) boots the base directly (unchanged).
-	baseQcow2 := baseDiskPath(entity)
+	baseQcow2, bderr := baseDiskPath(entity)
+	if bderr != nil {
+		return bderr
+	}
 	if _, err := os.Stat(baseQcow2); err != nil {
 		return fmt.Errorf("disk.qcow2 not found at %s — run `charly vm build %s` first", baseQcow2, entity)
 	}
@@ -125,7 +128,11 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
 		}
 	} else {
-		baseSeed := filepath.Join(vmDiskDir(entityLeaf(entity)), "seed.iso")
+		baseDir, derr := vmDiskDir(entityLeaf(entity))
+		if derr != nil {
+			return derr
+		}
+		baseSeed := filepath.Join(baseDir, "seed.iso")
 		if _, err := os.Stat(baseSeed); err == nil {
 			seedISOAbs, _ = filepath.Abs(baseSeed)
 		}
@@ -172,7 +179,11 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// volume must not be re-packed (the base's rendered answers live under the TEMPLATE's
 	// disk dir, not the clone's; re-packing would fail + re-seed a booted guest).
 	if shouldRepackIsoAnswers(spec, perDomain, seedISOAbs, isGoldenClone) {
-		if err := RepackPerDomainSeed(vmDiskDir(entityLeaf(entity)), seedISOAbs, pubKey); err != nil {
+		repackDir, derr := vmDiskDir(entityLeaf(entity))
+		if derr != nil {
+			return derr
+		}
+		if err := RepackPerDomainSeed(repackDir, seedISOAbs, pubKey); err != nil {
 			return fmt.Errorf("rendering the per-domain answers volume: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote per-domain answers volume %s\n", seedISOAbs)

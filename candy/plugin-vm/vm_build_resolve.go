@@ -340,7 +340,11 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		engine = kit.EngineBinary(rt.RunEngine)
 	}
 
-	outputDir, err := filepath.Abs(vmshared.VmDiskDir(boxName))
+	diskDir, err := vmshared.VmDiskDir(boxName)
+	if err != nil {
+		return spec.VmBuildReply{}, err
+	}
+	outputDir, err := filepath.Abs(diskDir)
 	if err != nil {
 		return spec.VmBuildReply{}, err
 	}
@@ -470,6 +474,10 @@ func resolveVmBuildIsoDistro(ctx context.Context, ex *sdk.Executor, dir string, 
 // baseDiskPath returns the built base disk path for an entity — the LEAF of a
 // namespace-qualified ref (the vm-build clone drive writes the disk under the
 // name as authored in the owning repo).
-func baseDiskPath(entity string) string {
-	return filepath.Join(vmDiskDir(entityLeaf(entity)), "disk.qcow2")
+func baseDiskPath(entity string) (string, error) {
+	dir, err := vmDiskDir(entityLeaf(entity))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "disk.qcow2"), nil
 }

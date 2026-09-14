@@ -229,7 +229,11 @@ func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	// stays undeletable (delete refuses while refcount > 0) until every clone is
 	// gone, and a re-capture only ever affects clones built after it (a STALE
 	// target here is rebuilt, picking up the re-captured snapshot).
-	clonePath := filepath.Join(vmDiskDir(vmName), "disk.qcow2")
+	cloneDir, derr := vmDiskDir(vmName)
+	if derr != nil {
+		return derr
+	}
+	clonePath := filepath.Join(cloneDir, "disk.qcow2")
 	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
@@ -258,7 +262,7 @@ func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	// Regenerate the cloud-init seed ISO with a fresh InstanceID.
 	// Pass nil for existingState — that's the path that auto-generates
 	// a new UUIDv4 (see vm_cloud_image.go:164-169).
-	seedPath := filepath.Join(vmDiskDir(vmName), "seed.iso")
+	seedPath := filepath.Join(cloneDir, "seed.iso")
 	if spec.CloudInit != nil || spec.SSH != nil {
 		// If cloud_init_clean is set, inject the clean runcmd so
 		// machine-id and ssh host keys regenerate on first boot.

@@ -145,12 +145,16 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		if err := BuildClone(entity, &vmSpec, reply.OutputDir, reply.VmStateDir); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Wrote %s (clone of %s@%s)\n",
-			filepath.Join(vmDiskDir(entity), "disk.qcow2"), entity, req.FromSnapshot)
-		if vmSpec.CloudInit != nil || vmSpec.SSH != nil {
-			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(vmDiskDir(entity), "seed.iso"))
+		cloneDir, derr := vmDiskDir(entity)
+		if derr != nil {
+			return derr
 		}
-		builtDisk = filepath.Join(vmDiskDir(entity), "disk.qcow2")
+		fmt.Fprintf(os.Stderr, "Wrote %s (clone of %s@%s)\n",
+			filepath.Join(cloneDir, "disk.qcow2"), entity, req.FromSnapshot)
+		if vmSpec.CloudInit != nil || vmSpec.SSH != nil {
+			fmt.Fprintf(os.Stderr, "Wrote %s\n", filepath.Join(cloneDir, "seed.iso"))
+		}
+		builtDisk = filepath.Join(cloneDir, "disk.qcow2")
 
 	default:
 		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))

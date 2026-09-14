@@ -327,7 +327,8 @@ func TestBuildClone_SecondBuildSkipsOverlayCreate(t *testing.T) {
 	if err := BuildClone("clone-vm", s, stateRoot, stateRoot); err != nil {
 		t.Fatalf("first BuildClone: %v", err)
 	}
-	disk := filepath.Join(vmDiskDir("clone-vm"), "disk.qcow2")
+	cloneDir, _ := vmDiskDir("clone-vm")
+	disk := filepath.Join(cloneDir, "disk.qcow2")
 	fi1, err := os.Stat(disk)
 	if err != nil {
 		t.Fatalf("stat clone disk: %v", err)

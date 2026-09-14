@@ -616,7 +616,10 @@ func (c *VmDestroyCmd) Run() error {
 	if c.Disk {
 		// Remove only THIS VM's disk dir — never the shared parent (which
 		// would delete every other VM's disk too).
-		qcow2Dir := vmDiskDir(c.Box)
+		qcow2Dir, derr := vmDiskDir(c.Box)
+		if derr != nil {
+			return derr
+		}
 		_ = os.RemoveAll(qcow2Dir)
 		fmt.Fprintf(os.Stderr, "Deleted disk images in %s\n", qcow2Dir)
 	}
