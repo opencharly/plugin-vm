@@ -18,7 +18,7 @@ func isoSpec(inst *spec.VmInstaller) *VmSpec {
 	s := &VmSpec{}
 	s.Source.Kind = "iso"
 	s.Source.Distro = "omarchy"
-	s.Source.URL = "https://iso.omarchy.org/omarchy-4.0.1.iso"
+	s.Source.URL = "https://iso.omarchy.org/omarchy-4.0.3.iso"
 	s.Source.Installer = inst
 	s.DiskSize = "60G"
 	return s
@@ -232,8 +232,11 @@ func TestQemuImgCreateBlank_RequiresASize(t *testing.T) {
 // This test is what caught the first version of the default, which propagated the resolver's
 // error and would have failed every ISO build on a keyless host.
 func TestInstallerSeedContext_UnresolvableKeyIsNotFatal(t *testing.T) {
-	// vmStateDir is empty and key_source is unset, so the resolver falls to its "auto"
-	// search and finds nothing to offer.
+	// key_source is unset ("auto") and HOME is an empty dir, so the resolver finds
+	// no ~/.ssh key and RETURNS AN ERROR — the branch under test. Pointing HOME at a
+	// temp dir makes this hermetic; an unset HOME lets a developer's real ~/.ssh key
+	// leak in and the resolver succeed, which is why this test was host-dependent.
+	t.Setenv("HOME", t.TempDir())
 	ctx, err := installerSeedContext(isoSpec(&spec.VmInstaller{
 		Username:      "user",
 		Password_hash: "$6$x$y",

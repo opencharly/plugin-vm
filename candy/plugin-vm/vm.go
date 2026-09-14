@@ -193,7 +193,7 @@ func (c *VmCreateCmd) Run() error {
 	// no separate startLibvirtUserSession is needed here. The entity's `backend:` pin is honored
 	// via vmConfiguredBackendPlugin's own plugin-side self-load (loaderkit.ResolveVmEntityViaExecutor)
 	// before the probe.
-	reply, err := hostConfigResolve(c.Box)
+	reply, err := hostConfigResolveFor(c.Box, c.Domain)
 	if err != nil {
 		return err
 	}

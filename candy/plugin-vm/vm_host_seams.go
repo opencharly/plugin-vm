@@ -78,6 +78,18 @@ type resolvedConfig struct {
 // deploy.FindVMClaimant; the effective VM backend is computed HERE (resolveVmBackendPlugin/
 // vmConfiguredBackendPlugin, F6 vm-lifecycle move, vm_backend_resolve.go).
 func hostConfigResolve(entity string) (resolvedConfig, error) {
+	return hostConfigResolveFor(entity, "")
+}
+
+// hostConfigResolveFor is hostConfigResolve with an explicit CLAIMANT IDENTITY
+// (the deploy key / domain identity of the deploy requesting this resolve). When
+// non-empty it is threaded into deploy.FindVMClaimant so the exclusive-resource
+// claimant resolves to THIS deploy's node — never an arbitrary sibling that
+// happens to share the same `from:` entity (RCA: 16 beds all `from: omarchy-vm`,
+// one carrying requires_exclusive: [nvidia-gpu]; the entity-wide scan made every
+// sibling demand the GPU). Callers with no deploy identity pass "" and keep the
+// legacy behavior.
+func hostConfigResolveFor(entity, claimantID string) (resolvedConfig, error) {
 	if cmdExec == nil {
 		return resolvedConfig{}, fmt.Errorf("config-resolve: no host reverse channel (command not compiled-in?)")
 	}
@@ -136,7 +148,7 @@ func hostConfigResolve(entity string) (resolvedConfig, error) {
 		merged := deploykit.MergedDeployTree(uf.Deploy, "vm config-resolve", func() (*deploykit.DeployConfig, error) {
 			return loaderkit.LoadHostDeployConfigViaExecutor(cmdCtx, cmdExec)
 		})
-		if claimant, claimantNode, hasClaimant := deploy.FindVMClaimant(merged, entity); hasClaimant {
+		if claimant, claimantNode, hasClaimant := deploy.FindVMClaimant(merged, entity, claimantID); hasClaimant {
 			cfg.Claimant = claimant
 			cfg.ClaimantNode = &claimantNode
 		}
