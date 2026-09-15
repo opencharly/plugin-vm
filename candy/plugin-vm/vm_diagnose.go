@@ -454,7 +454,8 @@ func seedPathFor(box, domain, instance string) (string, error) {
 // are used when things are already broken, and refusing to look at a guest because its
 // entity no longer resolves is the least useful moment to be strict.
 func vmBackendFor(entity string) (string, error) {
-	reply, err := hostConfigResolve(entity)
+	// Reads only Backend; no claimant identity — this is a config-free diagnosis path.
+	reply, err := hostConfigResolve(entity, "")
 	if err != nil {
 		return "libvirt", nil //nolint:nilerr // see comment above: degrade, do not block a diagnosis
 	}

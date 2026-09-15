@@ -21,7 +21,8 @@ var currentUsername = spec.CurrentUsername
 // is entity-independent). nil on a project-less invocation or a resolve error — the former core
 // gatherResources's "nil when none / unreadable" contract.
 func gatherResources() map[string]*ResolvedResource {
-	reply, err := hostConfigResolve("")
+	// Resource vocabulary only (reply.Resources); no claimant, so no identity is needed.
+	reply, err := hostConfigResolve("", "")
 	if err != nil {
 		return nil
 	}

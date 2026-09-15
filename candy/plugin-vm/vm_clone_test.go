@@ -289,10 +289,11 @@ func TestCloneDiskFresh(t *testing.T) {
 
 // TestBuildClone_SecondBuildSkipsOverlayCreate is the race regression gate: two
 // overlapping from: name:tag lanes building the SAME clone entity must NOT both
-// rewrite output/qcow2/<entity>/disk.qcow2 — the second build must skip the
-// overlay create (leaving the shared child untouched) instead of clobbering it
-// into the sibling lane's live domain. The snapshot refcount still goes up per
-// build: every lane holds a live reference until its destroy decrements.
+// rewrite <vm.image_dir>/<entity>/disk.qcow2 (the configurable disk root, default
+// "image"; sdk#259) — the second build must skip the overlay create (leaving the
+// shared child untouched) instead of clobbering it into the sibling lane's live
+// domain. The snapshot refcount still goes up per build: every lane holds a live
+// reference until its destroy decrements.
 func TestBuildClone_SecondBuildSkipsOverlayCreate(t *testing.T) {
 	stateRoot := t.TempDir()
 	t.Setenv(vmshared.VmStateDirEnv, stateRoot)

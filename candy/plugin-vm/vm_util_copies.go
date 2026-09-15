@@ -85,7 +85,8 @@ func memlockUnlimited(hard uint64) bool { return hard >= 1<<62 }
 // the 2222 default otherwise. The persisted READ is the ONE core-coupled bit (routed through the seam).
 func resolveVmSshPort(spec *VmSpec, vmName string) (int, error) {
 	if spec.SSH != nil && spec.SSH.PortAuto {
-		if reply, err := hostConfigResolve(vmName); err == nil && reply.VmState != nil && reply.VmState.SSHPort > 0 {
+		// Persisted-state read only (reply.VmState); no claimant, so no identity is needed.
+		if reply, err := hostConfigResolve(vmName, ""); err == nil && reply.VmState != nil && reply.VmState.SSHPort > 0 {
 			return reply.VmState.SSHPort, nil
 		}
 		alloc, err := kit.AllocateAutoPorts([]int{22}, nil)
@@ -117,7 +118,8 @@ func resolveVmPortForwards(spec *VmSpec, vmName string, occupied map[int]bool) (
 	// its guest port, so a create→deploy-add re-resolve is stable). The seam READ is
 	// the ONLY core-coupled bit; the pure allocation logic is resolvePortForwards.
 	var prior map[string]int
-	if reply, rerr := hostConfigResolve(vmName); rerr == nil && reply.VmState != nil {
+	// Persisted-state read only (reply.VmState); no claimant, so no identity is needed.
+	if reply, rerr := hostConfigResolve(vmName, ""); rerr == nil && reply.VmState != nil {
 		prior = reply.VmState.PortForwards
 	}
 	return resolvePortForwards(spec.Network.PortForwards, prior, occupied, vmName)
