@@ -70,8 +70,12 @@ github.com/opencharly/plugin-init/candy/plugin-init v0.2026237.1424 h1:Bldh1DoES
 github.com/opencharly/plugin-init/candy/plugin-init v0.2026237.1424/go.mod h1:tzB4pMZllnxK6Jpyeq5jxg4EQe1p544rQkhNdmPn788=
 github.com/opencharly/sdk v0.2026253.1714 h1:vVp+EYbZXNDZDOdHrX1mKMD4iCNvTAkOt0YTn60TQLA=
 github.com/opencharly/sdk v0.2026253.1714/go.mod h1:bHkz9iCZVrpRQ1GjmsqnnOZYkk6bidLqzmikJivJbrU=
+github.com/opencharly/sdk v0.2026258.154 h1:4+v9UitmXS1M01AQa3aa/ZyNx/b4lAJfdABrlW52J1Y=
+github.com/opencharly/sdk v0.2026258.154/go.mod h1:FfBfdol5Swc/bHZAO/79m4dCgEwxXTbdWfLUvAwjBtg=
 github.com/opencharly/spec v0.2026250.2036 h1:szPuKqRRzkGQcoM4NbSS7oJ6iHd3790EODsPzb0RASY=
 github.com/opencharly/spec v0.2026250.2036/go.mod h1:yaB8ABSTiJClK1xq/zCtWizcqfKKOhnuKcgGrHwxmW8=
+github.com/opencharly/spec v0.2026257.1817 h1:tcbTR1uBidr+VR7NzsYsZwInj5qEEMdYQJhD/zJtCoA=
+github.com/opencharly/spec v0.2026257.1817/go.mod h1:yaB8ABSTiJClK1xq/zCtWizcqfKKOhnuKcgGrHwxmW8=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
