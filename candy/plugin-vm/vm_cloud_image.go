@@ -14,8 +14,8 @@ import (
 	"github.com/opencharly/spec/sshx"
 )
 
-// vmBuildStamp is the content signature of a built disk base (output/qcow2/<entity>/disk.qcow2),
-// recorded at output/qcow2/<entity>/.build.stamp AFTER a successful build. `vm build` compares
+// vmBuildStamp is the content signature of a built disk base (<vm.image_dir>/<entity>/disk.qcow2),
+// recorded at <vm.image_dir>/<entity>/.build.stamp AFTER a successful build. `vm build` compares
 // the CURRENT source signature to the recorded one to decide whether the base is content-fresh
 // and the (expensive + hazardous) overlay-create + resize can be skipped (P8b-rest: ported
 // verbatim from charly/vm_cloud_image.go).
@@ -101,7 +101,7 @@ type CloudImageBuildResult struct {
 //  6. Pack user-data / meta-data / network-config into outputDir/seed.iso
 //     via WriteSeedISO.
 //
-// The caller (vm_build.go) passes outputDir (e.g. "output/qcow2/" from the working project
+// The caller (vm_build.go) passes outputDir (e.g. "<vm.image_dir>/" from the working project
 // tree) and vmStateDir (e.g. ~/.local/share/charly/vm/charly-<vm>/) for runtime state
 // persistence.
 //

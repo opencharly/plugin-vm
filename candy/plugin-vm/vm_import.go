@@ -286,8 +286,9 @@ func ListUnmanagedDomains() ([]string, error) {
 // so a single read of charly.yml suffices.
 func loadManagedVmSet() (map[string]bool, error) {
 	// The declared kind:vm entity names come from the config-resolve seam (the loader is a core
-	// Mechanism); the empty entity resolves the project-wide list in reply.VmEntities.
-	reply, err := hostConfigResolve("")
+	// Mechanism); the empty entity resolves the project-wide list in reply.VmEntities. No claimant
+	// is read, so no identity is needed.
+	reply, err := hostConfigResolve("", "")
 	if err != nil {
 		return map[string]bool{}, nil
 	}
@@ -475,7 +476,8 @@ func DiffImported(name, domainName string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	reply, err := hostConfigResolve(name)
+	// Config-only diff (reply.VM); no claimant read, so no identity is needed.
+	reply, err := hostConfigResolve(name, "")
 	if err != nil {
 		return nil, fmt.Errorf("resolving charly.yml: %w", err)
 	}

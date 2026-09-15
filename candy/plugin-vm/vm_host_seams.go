@@ -75,9 +75,19 @@ type resolvedConfig struct {
 // loaderkit.ResolveResourceViaExecutor, and the persisted VmState via
 // loaderkit.ResolveVmStateViaExecutor. The exclusive-resource Claimant is computed PLUGIN-SIDE
 // (#55 coneC-dsh β2 config-RESOLVE) from the loaded project deploy via deploykit.MergedDeployTree +
-// deploy.FindVMClaimant; the effective VM backend is computed HERE (resolveVmBackendPlugin/
+// vmClaimant; the effective VM backend is computed HERE (resolveVmBackendPlugin/
 // vmConfiguredBackendPlugin, F6 vm-lifecycle move, vm_backend_resolve.go).
-func hostConfigResolve(entity string) (resolvedConfig, error) {
+//
+// claimantID is the DOMAIN IDENTITY of the deploy requesting this resolve — REQUIRED for every
+// caller that reads cfg.Claimant (the create/stop/destroy paths, all of which carry the deploy's
+// --domain). It is threaded into vmClaimant so the claimant resolves to THIS deploy's node, never
+// an arbitrary sibling sharing the same `from:` entity (RCA: 16 beds all `from: omarchy-vm`, one
+// carrying requires_exclusive: [nvidia-gpu]; an identity-less scan made every sibling demand the
+// GPU). Pass "" ONLY when the caller reads NO claimant field — the config-only readers
+// (Resources/VmState/Backend/Vm/VMEntities) and the direct `charly vm create <entity>` with no
+// --domain, which spec documents as an entity-wide scan (ambiguous → no claim). Identity is an
+// explicit argument at every call site, never a hidden fallback.
+func hostConfigResolve(entity, claimantID string) (resolvedConfig, error) {
 	if cmdExec == nil {
 		return resolvedConfig{}, fmt.Errorf("config-resolve: no host reverse channel (command not compiled-in?)")
 	}
@@ -106,7 +116,7 @@ func hostConfigResolve(entity string) (resolvedConfig, error) {
 			// (the clone-base deploy) whose from: names the terminal template — the ONE
 			// chain resolver (loaderkit.DeployTargetEntity) handles the plain-entity and
 			// deploy-hop cases alike. The DISK/domain keying below stays on c.Box (the
-			// requested name — where the vm-build drive wrote output/qcow2/<box>/); only the
+			// requested name — where the vm-build drive wrote <vm.image_dir>/<box>/); only the
 			// SPEC resolve follows the chain.
 			target, ok := loaderkit.DeployTargetEntity(uf, entity)
 			if ok {
@@ -131,12 +141,11 @@ func hostConfigResolve(entity string) (resolvedConfig, error) {
 		}
 		cfg.Resources = spec.ResolvePluginKindViaPlugin(uf, "resource", loaderkit.ResolveResourceViaExecutor(cmdCtx, cmdExec))
 		// Claimant computation moved plugin-side (#55 coneC-dsh β2 config-RESOLVE): merge the
-		// per-host overlay via deploykit.MergedDeployTree (placement-invariant reader =
-		// loaderkit.LoadHostDeployConfigViaExecutor) + deploy.FindVMClaimant.
-		merged := deploykit.MergedDeployTree(uf.Deploy, "vm config-resolve", func() (*deploykit.DeployConfig, error) {
+		// per-host overlay (placement-invariant reader = loaderkit.LoadHostDeployConfigViaExecutor)
+		// then resolve identity-scoped — the ONE seam the create/stop/destroy paths share.
+		if claimant, claimantNode, hasClaimant := resolveClaimant(uf.Deploy, entity, claimantID, func() (*deploykit.DeployConfig, error) {
 			return loaderkit.LoadHostDeployConfigViaExecutor(cmdCtx, cmdExec)
-		})
-		if claimant, claimantNode, hasClaimant := deploy.FindVMClaimant(merged, entity); hasClaimant {
+		}); hasClaimant {
 			cfg.Claimant = claimant
 			cfg.ClaimantNode = &claimantNode
 		}
@@ -150,6 +159,21 @@ func hostConfigResolve(entity string) (resolvedConfig, error) {
 	}
 	cfg.Backend = backend
 	return cfg, nil
+}
+
+// resolveClaimant is the ONE exclusive-resource claimant resolver (R3): it merges the per-host
+// deploy overlay onto the project tree via the placement-invariant reader, then binds the result
+// to spec/deploy.FindVMClaimant — which is IDENTITY-SCOPED when claimantID is non-empty. Every
+// caller that reads the claimant passes the deploy's DOMAIN IDENTITY (the --domain flag value),
+// so THIS deploy's own node resolves, never an arbitrary sibling sharing the same `from:` entity.
+//
+// The merge and the identity-scope are one seam because the two bugs shared one shape: the
+// caller must supply both the tree AND its own identity. Extracted (not a bare call) so the
+// identity-scoping regression is unit-testable without the host reverse channel; the reader is a
+// parameter so a test can supply a fixed overlay.
+func resolveClaimant(project map[string]DeployNode, entity, claimantID string, read func() (*deploykit.DeployConfig, error)) (string, DeployNode, bool) {
+	merged := deploykit.MergedDeployTree(project, "vm config-resolve", read)
+	return deploy.FindVMClaimant(merged, entity, claimantID)
 }
 
 // hostConfigPersist now lives in vm_host_persist.go — the PLUGIN-SIDE deploy-ledger persist path

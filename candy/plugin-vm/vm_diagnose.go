@@ -436,7 +436,11 @@ func seedPathFor(box, domain, instance string) (string, error) {
 		}
 		return p, nil
 	}
-	p := filepath.Join(vmDiskDir(entityLeaf(box)), "seed.iso")
+	dir, derr := vmDiskDir(entityLeaf(box))
+	if derr != nil {
+		return "", derr
+	}
+	p := filepath.Join(dir, "seed.iso")
 	if _, err := os.Stat(p); err != nil {
 		return "", fmt.Errorf("no answers volume at %s — has `charly vm build %s` run?", p, box)
 	}
@@ -450,7 +454,8 @@ func seedPathFor(box, domain, instance string) (string, error) {
 // are used when things are already broken, and refusing to look at a guest because its
 // entity no longer resolves is the least useful moment to be strict.
 func vmBackendFor(entity string) (string, error) {
-	reply, err := hostConfigResolve(entity)
+	// Reads only Backend; no claimant identity — this is a config-free diagnosis path.
+	reply, err := hostConfigResolve(entity, "")
 	if err != nil {
 		return "libvirt", nil //nolint:nilerr // see comment above: degrade, do not block a diagnosis
 	}

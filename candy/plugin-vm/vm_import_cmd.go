@@ -224,13 +224,14 @@ func scanDriftAcrossImports() ([][2]string, error) {
 func loadUnifiedForImport() (map[string]*VmSpec, bool, error) {
 	// The declared kind:vm entities come from the config-resolve seam (the loader is a core Mechanism).
 	// The empty entity yields the project-wide name list; each is resolved to its *VmSpec via the seam.
-	reply, err := hostConfigResolve("")
+	// No claimant is read (config-only listing), so no identity is needed.
+	reply, err := hostConfigResolve("", "")
 	if err != nil {
 		return nil, false, err
 	}
 	out := make(map[string]*VmSpec, len(reply.VmEntities))
 	for _, k := range reply.VmEntities {
-		if r, rerr := hostConfigResolve(k); rerr == nil && r.VM != nil {
+		if r, rerr := hostConfigResolve(k, ""); rerr == nil && r.VM != nil {
 			out[k] = r.VM
 		}
 	}

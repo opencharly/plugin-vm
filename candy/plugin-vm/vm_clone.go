@@ -43,48 +43,14 @@ import (
 // treated as stale (a broken chain is a different, louder error at overlay
 // create); only a genuinely newer backing file trips the guard.
 func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
-	if entry == nil || entry.DiskPath == "" || entry.Created == "" {
-		return "", nil // nothing to check
-	}
-	created, err := time.Parse(time.RFC3339, entry.Created)
-	if err != nil {
-		return "", fmt.Errorf("parsing snapshot created time %q: %w", entry.Created, err)
-	}
-	cmd := exec.Command("qemu-img", "info", "--backing-chain", "-U", "--output", "json", entry.DiskPath)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("qemu-img info --backing-chain %s: %w", entry.DiskPath, err)
-	}
-	var chain []struct {
-		Filename string `json:"filename"`
-	}
-	if err := json.Unmarshal(out, &chain); err != nil {
-		return "", fmt.Errorf("parsing qemu-img backing chain: %w", err)
-	}
-	for _, img := range chain {
-		if img.Filename == "" || img.Filename == entry.DiskPath {
-			continue // the snapshot's own disk is not a backing file
-		}
-		fi, err := os.Stat(img.Filename)
-		if err != nil {
-			continue // a missing backing file is a different error (overlay create will fail loudly)
-		}
-		// The registry stores Created at RFC3339 second precision; the disk's
-		// capture-finalization write can land sub-second after that timestamp.
-		// Truncate the mtime to seconds so a same-second write is not a false
-		// STALE (the snapshot is valid; only a genuinely later rebuild is stale).
-		if fi.ModTime().Truncate(time.Second).After(created) {
-			return img.Filename, nil
-		}
-	}
-	return "", nil
+	return vmshared.SnapshotBackingStalePath(entry)
 }
 
 // cloneDiskFresh reports whether the target clone overlay at clonePath ALREADY
 // materializes the resolved snapshot: it exists, its backing file is exactly
 // snapshotDisk — the SNAPSHOT STORE disk (~/.local/share/charly/vm/charly-
 // <fromVm>/snapshots/<tag>/disk.qcow2), never the golden's live
-// output/qcow2/<fromVm>/disk.qcow2 — and the snapshot disk was NOT re-captured
+// <vm.image_dir>/<fromVm>/disk.qcow2 — and the snapshot disk was NOT re-captured
 // after the overlay was created.
 //
 // Freshness semantics (the shared-link contract):
@@ -93,7 +59,7 @@ func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
 //     concurrent lane's live domain has open read-write — the overlapping-lanes
 //     race (qemu-img: .../disk.qcow2: Failed to get "write" lock when
 //     `vm build <entity> --from-snapshot <tag>` runs against the same
-//     output/qcow2/<entity>/disk.qcow2 while the sibling lane's VM is live).
+//     <vm.image_dir>/<entity>/disk.qcow2 while the sibling lane's VM is live).
 //     The skip is the clone arm of the idempotent-skip discipline every other
 //     source-kind build already has (BuildCloudImage's diskBaseFresh; the
 //     vm_build.go Force doc: "the concurrent-bed R10 uses idempotent-skip,
@@ -172,7 +138,7 @@ func sameAbsPath(a, b string) bool {
 //
 // vmName is the new VM (the clone target). spec is its VmSpec
 // (source.from_vm and source.from_snapshot fully populated). outputDir
-// is where output/qcow2/disk.qcow2 + output/qcow2/seed.iso will be
+// is where <vm.image_dir>/disk.qcow2 + <vm.image_dir>/seed.iso will be
 // written, mirroring the cloud_image build path's conventions.
 func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	if spec.Source.Kind != "clone" {
@@ -229,7 +195,11 @@ func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	// stays undeletable (delete refuses while refcount > 0) until every clone is
 	// gone, and a re-capture only ever affects clones built after it (a STALE
 	// target here is rebuilt, picking up the re-captured snapshot).
-	clonePath := filepath.Join(vmDiskDir(vmName), "disk.qcow2")
+	cloneDir, derr := vmDiskDir(vmName)
+	if derr != nil {
+		return derr
+	}
+	clonePath := filepath.Join(cloneDir, "disk.qcow2")
 	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
 		return fmt.Errorf("creating output dir: %w", err)
 	}
@@ -258,7 +228,7 @@ func BuildClone(vmName string, spec *VmSpec, _, vmStateDir string) error {
 	// Regenerate the cloud-init seed ISO with a fresh InstanceID.
 	// Pass nil for existingState — that's the path that auto-generates
 	// a new UUIDv4 (see vm_cloud_image.go:164-169).
-	seedPath := filepath.Join(vmDiskDir(vmName), "seed.iso")
+	seedPath := filepath.Join(cloneDir, "seed.iso")
 	if spec.CloudInit != nil || spec.SSH != nil {
 		// If cloud_init_clean is set, inject the clean runcmd so
 		// machine-id and ssh host keys regenerate on first boot.

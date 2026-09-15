@@ -193,7 +193,7 @@ func (c *VmCreateCmd) Run() error {
 	// no separate startLibvirtUserSession is needed here. The entity's `backend:` pin is honored
 	// via vmConfiguredBackendPlugin's own plugin-side self-load (loaderkit.ResolveVmEntityViaExecutor)
 	// before the probe.
-	reply, err := hostConfigResolve(c.Box)
+	reply, err := hostConfigResolve(c.Box, c.Domain)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (c *VmCreateCmd) Run() error {
 
 	if reply.VM != nil {
 		// VmSpec-driven create pipeline: RenderDomain for libvirt, RenderQemuArgv for qemu. Uses
-		// output/qcow2/{disk,seed} produced by `charly vm build`. claimantNode + resources drive GPU
+		// <vm.image_dir>/{disk,seed} produced by `charly vm build`. claimantNode + resources drive GPU
 		// auto-allocation (gpu_allocate.go).
 		return c.runVmSpecCreate(c.Box, reply.VM, reply.Backend, reply.ClaimantNode, reply.Resources, reply.VmState)
 	}
@@ -261,11 +261,17 @@ func (c *VmStartCmd) Run() error {
 }
 
 // startVM starts a previously-created VM by image+instance, dispatching by
-// backend (libvirt domain start / re-exec the stored qemu command). Shared
-// by VmStartCmd.Run and the resource arbiter (candy/plugin-preempt) so the holder-
-// restart path runs the exact same lifecycle code as `charly vm start`.
+// backend (libvirt domain start / re-exec the stored qemu command). Called only by
+// VmStartCmd.Run. The resource arbiter's holder-restart path does NOT route through
+// this — candy/plugin-preempt's startVMPlugin reaches the vm plugin's "start" op over
+// the reverse channel directly (its holder dispatch is config-free; it must restore a
+// holder even when the project config is gone), so this needs no shared-abstraction
+// contract with it.
 func startVM(box, instance, domain string) error {
-	reply, err := hostConfigResolve(box)
+	// No claimant read here: start reconnects an existing domain and acquires/releases
+	// no lease. Identity is still threaded so the resolve is consistent with create/stop/
+	// destroy — a mis-scoped claimant can never leak into any future field this reads.
+	reply, err := hostConfigResolve(box, domain)
 	if err != nil {
 		return err
 	}
@@ -382,8 +388,10 @@ func (c *VmStopCmd) Run() error {
 		return err
 	}
 	// Releasing a persistent exclusive claim on this VM restores any holder it
-	// preempted (no-op if no lease / gated by an outer orchestrator).
-	if claimant, _, ok := lookupVMClaimant(c.Box); ok {
+	// preempted (no-op if no lease / gated by an outer orchestrator). The identity is
+	// the SAME --domain the claim was acquired with at create — an identity-less scan
+	// would resolve a sibling's claim (or none) and leak THIS deploy's lease.
+	if claimant, _, ok := lookupVMClaimant(c.Box, c.Domain); ok {
 		releaseResourceClaim(claimant)
 	}
 	return nil
@@ -564,8 +572,10 @@ func stopVmDomain(name string, force bool) (bool, error) {
 func (c *VmDestroyCmd) Run() error {
 	// Releasing a persistent exclusive claim on this VM restores any preempted
 	// holder once the claimant is gone (deferred so it runs on every exit;
-	// no-op if no lease / gated by an outer orchestrator).
-	if claimant, _, ok := lookupVMClaimant(c.Box); ok {
+	// no-op if no lease / gated by an outer orchestrator). Identity-scoped by the
+	// SAME --domain the claim was acquired with at create, so a sibling deploy's
+	// lease is never touched and this deploy's is never leaked.
+	if claimant, _, ok := lookupVMClaimant(c.Box, c.Domain); ok {
 		defer releaseResourceClaim(claimant)
 	}
 
@@ -616,7 +626,10 @@ func (c *VmDestroyCmd) Run() error {
 	if c.Disk {
 		// Remove only THIS VM's disk dir — never the shared parent (which
 		// would delete every other VM's disk too).
-		qcow2Dir := vmDiskDir(c.Box)
+		qcow2Dir, derr := vmDiskDir(c.Box)
+		if derr != nil {
+			return derr
+		}
 		_ = os.RemoveAll(qcow2Dir)
 		fmt.Fprintf(os.Stderr, "Deleted disk images in %s\n", qcow2Dir)
 	}
@@ -816,7 +829,9 @@ func (c *VmConsoleCmd) Run() error {
 	if c.Dump {
 		return dumpVmSerialLog(vmName(domainOr(c.Box, c.Domain), c.Instance), c.Lines)
 	}
-	reply, err := hostConfigResolve(c.Box)
+	// Console reads only Backend; the identity is threaded for resolve consistency
+	// (no claimant field is consumed here).
+	reply, err := hostConfigResolve(c.Box, c.Domain)
 	if err != nil {
 		return err
 	}

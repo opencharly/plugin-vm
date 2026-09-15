@@ -116,12 +116,21 @@ func TestApplyCloneDriveSource_Qualified(t *testing.T) {
 // ref keys the entity dir by the LEAF (the vm-build clone drive writes the
 // disk there). This test FAILS without the leaf-stripping in baseDiskPath.
 func TestBaseDiskPath(t *testing.T) {
-	got := baseDiskPath("omarchy.check-charly-omarchy-vm")
-	want := filepath.Join(vmDiskDir("check-charly-omarchy-vm"), "disk.qcow2")
+	got, err := baseDiskPath("omarchy.check-charly-omarchy-vm")
+	if err != nil {
+		t.Fatalf("baseDiskPath: %v", err)
+	}
+	leafDir, _ := vmDiskDir("check-charly-omarchy-vm")
+	want := filepath.Join(leafDir, "disk.qcow2")
 	if got != want {
 		t.Fatalf("baseDiskPath(qualified) = %q, want %q (the leaf-keyed path)", got, want)
 	}
-	if got := baseDiskPath("check-omarchy-eval-base-inst"); got != filepath.Join(vmDiskDir("check-omarchy-eval-base-inst"), "disk.qcow2") {
-		t.Fatalf("baseDiskPath(local) = %q, want the unchanged local path", got)
+	got2, err := baseDiskPath("check-omarchy-eval-base-inst")
+	if err != nil {
+		t.Fatalf("baseDiskPath: %v", err)
+	}
+	localDir, _ := vmDiskDir("check-omarchy-eval-base-inst")
+	if got2 != filepath.Join(localDir, "disk.qcow2") {
+		t.Fatalf("baseDiskPath(local) = %q, want the unchanged local path", got2)
 	}
 }

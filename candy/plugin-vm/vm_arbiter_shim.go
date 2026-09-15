@@ -43,10 +43,14 @@ func arbiterInvoke(in spec.ArbiterInvokeInput) (spec.ArbiterInvokeReply, error) 
 	return reply, nil
 }
 
-// lookupVMClaimant resolves whether a deploy/check node claims this VM via requires_exclusive — a
-// config read routed through the config-resolve seam (the loader is a core Mechanism).
-func lookupVMClaimant(box string) (string, DeployNode, bool) {
-	reply, err := hostConfigResolve(box)
+// lookupVMClaimant resolves whether THIS deploy (identity = the --domain value) claims the
+// entity's VM via requires_exclusive — a config read routed through the config-resolve seam (the
+// loader is a core Mechanism). The identity is MANDATORY: an identity-less scan resolves the
+// entity's arbitrary sibling (or nothing, when several claim it), so the stop/destroy release
+// would free the WRONG deploy's lease (or leak this one's). Callers pass the same --domain the
+// claimant was acquired with at create.
+func lookupVMClaimant(entity, identity string) (string, DeployNode, bool) {
+	reply, err := hostConfigResolve(entity, identity)
 	if err != nil || reply.Claimant == "" || reply.ClaimantNode == nil {
 		return "", DeployNode{}, false
 	}
