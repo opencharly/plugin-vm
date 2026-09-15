@@ -43,41 +43,7 @@ import (
 // treated as stale (a broken chain is a different, louder error at overlay
 // create); only a genuinely newer backing file trips the guard.
 func snapshotBackingStale(entry *vmshared.SnapshotEntry) (string, error) {
-	if entry == nil || entry.DiskPath == "" || entry.Created == "" {
-		return "", nil // nothing to check
-	}
-	created, err := time.Parse(time.RFC3339, entry.Created)
-	if err != nil {
-		return "", fmt.Errorf("parsing snapshot created time %q: %w", entry.Created, err)
-	}
-	cmd := exec.Command("qemu-img", "info", "--backing-chain", "-U", "--output", "json", entry.DiskPath)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("qemu-img info --backing-chain %s: %w", entry.DiskPath, err)
-	}
-	var chain []struct {
-		Filename string `json:"filename"`
-	}
-	if err := json.Unmarshal(out, &chain); err != nil {
-		return "", fmt.Errorf("parsing qemu-img backing chain: %w", err)
-	}
-	for _, img := range chain {
-		if img.Filename == "" || img.Filename == entry.DiskPath {
-			continue // the snapshot's own disk is not a backing file
-		}
-		fi, err := os.Stat(img.Filename)
-		if err != nil {
-			continue // a missing backing file is a different error (overlay create will fail loudly)
-		}
-		// The registry stores Created at RFC3339 second precision; the disk's
-		// capture-finalization write can land sub-second after that timestamp.
-		// Truncate the mtime to seconds so a same-second write is not a false
-		// STALE (the snapshot is valid; only a genuinely later rebuild is stale).
-		if fi.ModTime().Truncate(time.Second).After(created) {
-			return img.Filename, nil
-		}
-	}
-	return "", nil
+	return vmshared.SnapshotBackingStalePath(entry)
 }
 
 // cloneDiskFresh reports whether the target clone overlay at clonePath ALREADY
