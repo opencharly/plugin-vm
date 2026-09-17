@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	libvirt "github.com/digitalocean/go-libvirt"
 
@@ -295,15 +296,56 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 	case "domain-state":
 		conn, err := connectLibvirt(uri)
 		if err != nil {
-			return internalJSON(map[string]any{"exists": false, "running": false, "error": err.Error()})
+			return internalJSON(map[string]any{"exists": false, "running": false, "state": "unreachable", "error": err.Error()})
 		}
 		defer conn.Close() //nolint:errcheck
 		dom, err := conn.lookupDomain(env.VmName)
 		if err != nil {
-			return internalJSON(map[string]any{"exists": false, "running": false})
+			// The domain is GONE — distinct from "still defining/booting". A readiness
+			// consumer must treat this as terminal, so report it explicitly.
+			return internalJSON(map[string]any{"exists": false, "running": false, "state": "absent"})
 		}
 		st, _ := conn.domainState(dom)
-		return internalJSON(map[string]any{"exists": true, "running": st == libvirt.DomainRunning})
+		// The STATE STRING + FAILED flag are what let a readiness poll tell "still
+		// booting" (running, agent not yet up) from "will never be ready" (crashed /
+		// shut off) and hard-fail immediately instead of burning the whole cap.
+		state := domainStateString(st)
+		return internalJSON(map[string]any{
+			"exists":  true,
+			"running": st == libvirt.DomainRunning,
+			"state":   state,
+			"failed":  st == libvirt.DomainCrashed || st == libvirt.DomainShutoff,
+		})
+
+	case "guest-ping":
+		// qemu-guest-agent readiness: the agent only answers once the guest OS is up
+		// (agent daemon started), so a successful ping is a REAL "the OS booted"
+		// signal — strictly earlier and stronger than sshd. Domain state is checked
+		// FIRST so a crashed/absent domain reports as terminal, never as "not yet".
+		conn, err := connectLibvirt(uri)
+		if err != nil {
+			return internalJSON(map[string]any{"ready": false, "state": "unreachable", "error": err.Error()})
+		}
+		defer conn.Close() //nolint:errcheck
+		dom, err := conn.lookupDomain(env.VmName)
+		if err != nil {
+			return internalJSON(map[string]any{"ready": false, "state": "absent"})
+		}
+		st, _ := conn.domainState(dom)
+		if st != libvirt.DomainRunning {
+			state := domainStateString(st)
+			return internalJSON(map[string]any{
+				"ready":  false,
+				"state":  state,
+				"failed": st == libvirt.DomainCrashed || st == libvirt.DomainShutoff,
+			})
+		}
+		agent := NewGuestAgent(conn.l, dom, 10*time.Second)
+		if err := agent.Ping(); err != nil {
+			// The domain is up but the agent has not connected yet — transient.
+			return internalJSON(map[string]any{"ready": false, "state": "running", "error": err.Error()})
+		}
+		return internalJSON(map[string]any{"ready": true, "state": "running"})
 
 	case "list-domains":
 		conn, err := connectLibvirt(uri)
