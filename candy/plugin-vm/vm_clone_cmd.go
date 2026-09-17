@@ -4,28 +4,30 @@ import (
 	"fmt"
 )
 
-// vm_clone_cmd.go — Kong subcommand wiring for `charly vm clone`. The
-// command is a thin frontend over BuildClone in vm_clone.go: it
-// resolves the source-vm@snapshot reference, persists a kind:vm
-// declaration to vm.yml, and calls the standard build/create flow.
+// vm_clone_cmd.go — Kong subcommand wiring for `charly vm clone`.
+//
+// RETIRED (Cutover A addendum Phase 3): the command used to persist a
+// `source.kind: clone` ENTITY, the entity arm that retirement removed. The
+// verb is kept ONLY as a hard error pointing at the two supported spellings:
+// author the clone on the DEPLOY (`vm: <name>: {from: <src>:<snapshot>}` — the
+// loader splits the tag into from + from_snapshot), or build a one-off
+// self-clone with `charly vm build <entity> --from-snapshot <tag>`.
 
-// VmCloneCmd implements `charly vm clone <new> --from <src>[@<snap>]`.
+// VmCloneCmd implements the retired `charly vm clone` verb. Its flags are kept
+// so the parser still recognizes the invocation and the error names the exact
+// replacement; the command performs no work.
 type VmCloneCmd struct {
-	// Name is the new VM name (kind:vm entity key).
-	Name string `arg:"" help:"New VM name"`
+	// Name is the (ignored) entity name the caller asked to clone.
+	Name string `arg:"" help:"(retired) New VM name"`
 
-	// From is the source VM, optionally with @snapshot. Forms:
-	//   --from arch              → clone from arch's current state (auto-snapshot)
-	//   --from arch@baseline     → clone from arch's "baseline" snapshot
-	From string `name:"from" required:"" help:"Source VM, optionally @snapshot (e.g. arch@baseline)"`
+	// From is the (ignored) source reference.
+	From string `name:"from" required:"" help:"(retired) source VM, optionally @snapshot"`
 
-	// CloudInitClean injects cloud-init clean --machine-id into the
-	// clone's user-data. Default true for ad-hoc clones (so two clones
-	// don't collide on machine-id).
-	CloudInitClean bool `name:"cloud-init-clean" default:"true" help:"Regenerate machine-id and SSH host keys on first boot"`
+	// CloudInitClean is ignored (retirement left the flag for parse compatibility).
+	CloudInitClean bool `name:"cloud-init-clean" default:"true" hidden:"" help:"(retired)"`
 
-	// Build, when true, also runs `charly vm build` after writing vm.yml.
-	Build bool `name:"build" default:"true" help:"After writing vm.yml, run charly vm build to materialize the clone disk"`
+	// Build is ignored (retirement left the flag for parse compatibility).
+	Build bool `name:"build" default:"true" hidden:"" help:"(retired)"`
 }
 
 // Run executes `charly vm clone`. RETIRED (Cutover A addendum Phase 3): the command
