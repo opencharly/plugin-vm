@@ -324,28 +324,23 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 		// FIRST so a crashed/absent domain reports as terminal, never as "not yet".
 		conn, err := connectLibvirt(uri)
 		if err != nil {
-			return internalJSON(map[string]any{"ready": false, "state": "unreachable", "error": err.Error()})
+			return internalJSON(guestPingState("unreachable", err))
 		}
 		defer conn.Close() //nolint:errcheck
 		dom, err := conn.lookupDomain(env.VmName)
 		if err != nil {
-			return internalJSON(map[string]any{"ready": false, "state": "absent"})
+			return internalJSON(guestPingState("absent", nil)) // no such domain
 		}
 		st, _ := conn.domainState(dom)
 		if st != libvirt.DomainRunning {
-			state := domainStateString(st)
-			return internalJSON(map[string]any{
-				"ready":  false,
-				"state":  state,
-				"failed": st == libvirt.DomainCrashed || st == libvirt.DomainShutoff,
-			})
+			return internalJSON(guestPingState(domainStateString(st), nil))
 		}
 		agent := NewGuestAgent(conn.l, dom, 10*time.Second)
 		if err := agent.Ping(); err != nil {
 			// The domain is up but the agent has not connected yet — transient.
-			return internalJSON(map[string]any{"ready": false, "state": "running", "error": err.Error()})
+			return internalJSON(guestPingState("running", err))
 		}
-		return internalJSON(map[string]any{"ready": true, "state": "running"})
+		return internalJSON(guestPingState("running", nil))
 
 	case "list-domains":
 		conn, err := connectLibvirt(uri)
@@ -567,4 +562,33 @@ func internalJSON(v any) (*pb.InvokeReply, error) {
 		return nil, err
 	}
 	return &pb.InvokeReply{ResultJson: j}, nil
+}
+
+// guestPingReply is the `guest-ping` op's reply — the readiness verdict a deploy consumes.
+// state is the libvirt domain state string ("running"/"shut off"/"crashed"/"paused"/
+// "suspended"), or "absent" (no such domain) / "unreachable" (libvirt connect failed) when
+// there is no domain state to report. failed marks a TERMINAL state — a domain that will
+// never become ready, so a poll must abort instead of retrying to its cap.
+type guestPingReply struct {
+	Ready  bool   `json:"ready"`
+	State  string `json:"state"`
+	Failed bool   `json:"failed"`
+	Error  string `json:"error,omitempty"`
+}
+
+// guestPingState builds the `guest-ping` reply from the observed domain state + probe error.
+// PURE — no libvirt — so the readiness verdict derivation is unit-testable. state=="" means
+// the domain could not be observed at all (absent / unreachable); the caller passes that as
+// the terminal "absent"/"unreachable" state. Only a `running` domain is non-terminal.
+func guestPingState(state string, probeErr error) guestPingReply {
+	if state == "" {
+		state = "absent"
+	}
+	terminal := state == "absent" || state == "unreachable" || state == "crashed" || state == "shut off"
+	ready := state == "running" && probeErr == nil
+	r := guestPingReply{Ready: ready, State: state, Failed: terminal && !ready}
+	if probeErr != nil {
+		r.Error = probeErr.Error()
+	}
+	return r
 }
