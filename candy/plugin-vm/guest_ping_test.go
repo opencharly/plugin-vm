@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	libvirt "github.com/digitalocean/go-libvirt"
 	pb "github.com/opencharly/spec/proto"
 )
 
@@ -144,5 +145,22 @@ func TestInvokeDomainState_UnreachableIsTerminal(t *testing.T) {
 	}
 	if !got.Failed || got.State != "unreachable" {
 		t.Fatalf("an unreachable libvirt must be a TERMINAL domain-state verdict (failed, state=unreachable), got %+v", got)
+	}
+}
+
+// TestTerminalDomainState_MatchesProducerLiterals proves the terminal predicate's string keys are
+// exactly what domainStateString PRODUCES for the libvirt states it treats as terminal — so the
+// tested literals cannot drift from the producer.
+func TestTerminalDomainState_MatchesProducerLiterals(t *testing.T) {
+	// The producer emits these strings for the states the predicate must classify terminal.
+	for _, st := range []libvirt.DomainState{libvirt.DomainCrashed, libvirt.DomainShutoff} {
+		s := domainStateString(st)
+		if !terminalDomainState(s) {
+			t.Errorf("domainStateString(%v) = %q, which terminalDomainState does NOT classify terminal", st, s)
+		}
+	}
+	// And `running` (the ONLY non-terminal producer literal) is not terminal.
+	if terminalDomainState(domainStateString(libvirt.DomainRunning)) {
+		t.Errorf("running must not be terminal")
 	}
 }

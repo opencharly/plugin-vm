@@ -219,8 +219,8 @@ func (c *VmCreateCmd) Run() error {
 	return fmt.Errorf(
 		"VM %q has no kind:vm entity in charly.yml.\n"+
 			"  Declare one (optionally paired with a bootc image), e.g.:\n"+
-			"      vm:\n"+
-			"        %s-bootc:\n"+
+			"      %s-bootc:\n"+
+			"        vm:\n"+
 			"          source: {kind: bootc, image: %s}",
 		c.Box, c.Box, c.Box)
 }

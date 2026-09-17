@@ -96,8 +96,8 @@ func noVmEntityErr(boxName string) error {
 	return fmt.Errorf(
 		"VM %q has no kind:vm entity in charly.yml.\n"+
 			"  For a bootc VM, declare one in charly.yml:\n"+
-			"      vm:\n"+
-			"        %s-bootc:\n"+
+			"      %s-bootc:\n"+
+			"        vm:\n"+
 			"          source:\n"+
 			"            kind: bootc\n"+
 			"            image: %s\n"+
