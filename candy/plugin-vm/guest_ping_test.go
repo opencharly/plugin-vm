@@ -83,3 +83,45 @@ func TestInvokeGuestPing_UnreachableIsTerminal(t *testing.T) {
 		t.Fatalf("an unreachable libvirt must be a TERMINAL verdict, got %+v", got)
 	}
 }
+
+// TestDomainStateReply_TerminalField pins the `domain-state` reply's `failed` field for EVERY
+// terminal state (including the absent/unreachable arms the pre-review omitted it from), derived
+// from the ONE terminalDomainState predicate the guest-ping verdict also uses.
+func TestDomainStateReply_TerminalField(t *testing.T) {
+	cases := []struct {
+		state      string
+		wantFailed bool
+	}{
+		{"running", false},
+		{"paused", false},
+		{"crashed", true},
+		{"shut off", true},
+		{"absent", true},
+		{"unreachable", true},
+	}
+	for _, c := range cases {
+		t.Run(c.state, func(t *testing.T) {
+			r := makeDomainStateReply(true, c.state == "running", c.state, "")
+			if r.Failed != c.wantFailed {
+				t.Errorf("domain-state %q: Failed = %v, want %v", c.state, r.Failed, c.wantFailed)
+			}
+			if r.State != c.state {
+				t.Errorf("domain-state %q: State = %q", c.state, r.State)
+			}
+		})
+	}
+}
+
+// TestTerminalDomainState_OneDefinition guards the single terminal predicate both ops share.
+func TestTerminalDomainState_OneDefinition(t *testing.T) {
+	for _, s := range []string{"absent", "unreachable", "crashed", "shut off"} {
+		if !terminalDomainState(s) {
+			t.Errorf("terminalDomainState(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"running", "paused", "suspended", ""} {
+		if terminalDomainState(s) {
+			t.Errorf("terminalDomainState(%q) = true, want false", s)
+		}
+	}
+}

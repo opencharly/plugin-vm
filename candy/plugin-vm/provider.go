@@ -296,26 +296,17 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 	case "domain-state":
 		conn, err := connectLibvirt(uri)
 		if err != nil {
-			return internalJSON(map[string]any{"exists": false, "running": false, "state": "unreachable", "error": err.Error()})
+			return internalJSON(makeDomainStateReply(false, false, "unreachable", err.Error()))
 		}
 		defer conn.Close() //nolint:errcheck
 		dom, err := conn.lookupDomain(env.VmName)
 		if err != nil {
 			// The domain is GONE — distinct from "still defining/booting". A readiness
-			// consumer must treat this as terminal, so report it explicitly.
-			return internalJSON(map[string]any{"exists": false, "running": false, "state": "absent"})
+			// consumer must treat this as terminal, so `failed` is set here too.
+			return internalJSON(makeDomainStateReply(false, false, "absent", ""))
 		}
 		st, _ := conn.domainState(dom)
-		// The STATE STRING + FAILED flag are what let a readiness poll tell "still
-		// booting" (running, agent not yet up) from "will never be ready" (crashed /
-		// shut off) and hard-fail immediately instead of burning the whole cap.
-		state := domainStateString(st)
-		return internalJSON(map[string]any{
-			"exists":  true,
-			"running": st == libvirt.DomainRunning,
-			"state":   state,
-			"failed":  st == libvirt.DomainCrashed || st == libvirt.DomainShutoff,
-		})
+		return internalJSON(makeDomainStateReply(true, st == libvirt.DomainRunning, domainStateString(st), ""))
 
 	case "guest-ping":
 		// qemu-guest-agent readiness: the agent only answers once the guest OS is up
@@ -564,7 +555,40 @@ func internalJSON(v any) (*pb.InvokeReply, error) {
 	return &pb.InvokeReply{ResultJson: j}, nil
 }
 
-// guestPingReply is the `guest-ping` op's reply — the readiness verdict a deploy consumes.
+// terminalDomainState reports whether a libvirt domain-state string (or the synthetic
+// "absent"/"unreachable") is TERMINAL — the domain can never become ready, so a readiness
+// consumer must abort rather than retry. The ONE definition both the `domain-state` reply's
+// `failed` field and the `guest-ping` verdict derive from (R3 — no per-call-site enum).
+func terminalDomainState(state string) bool {
+	switch state {
+	case "absent", "unreachable", "crashed", "shut off":
+		return true
+	default:
+		return false
+	}
+}
+
+// domainStateReply is the `domain-state` op's reply — the domain's EXISTENCE, RUNNING flag,
+// STATE STRING, and the TERMINAL `failed` flag a readiness consumer reads. PURE (no libvirt),
+// so the reply shape is unit-testable and the terminal derivation lives in ONE place.
+type domainStateReply struct {
+	Exists  bool   `json:"exists"`
+	Running bool   `json:"running"`
+	State   string `json:"state"`
+	Failed  bool   `json:"failed"`
+	Error   string `json:"error,omitempty"`
+}
+
+func makeDomainStateReply(exists, running bool, state, errMsg string) domainStateReply {
+	return domainStateReply{
+		Exists:  exists,
+		Running: running,
+		State:   state,
+		Failed:  terminalDomainState(state),
+		Error:   errMsg,
+	}
+}
+
 // state is the libvirt domain state string ("running"/"shut off"/"crashed"/"paused"/
 // "suspended"), or "absent" (no such domain) / "unreachable" (libvirt connect failed) when
 // there is no domain state to report. failed marks a TERMINAL state — a domain that will
@@ -584,9 +608,8 @@ func guestPingState(state string, probeErr error) guestPingReply {
 	if state == "" {
 		state = "absent"
 	}
-	terminal := state == "absent" || state == "unreachable" || state == "crashed" || state == "shut off"
 	ready := state == "running" && probeErr == nil
-	r := guestPingReply{Ready: ready, State: state, Failed: terminal && !ready}
+	r := guestPingReply{Ready: ready, State: state, Failed: terminalDomainState(state)}
 	if probeErr != nil {
 		r.Error = probeErr.Error()
 	}

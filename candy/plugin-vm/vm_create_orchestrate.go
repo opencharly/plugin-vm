@@ -35,7 +35,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// Merge this host's per-domain instance override (~/.local/share/charly/vm/
 	// <domain>/instance.yml) onto the spec BEFORE any rendering. Its `libvirt:`
 	// overlay carries the host-specific GPU <hostdev> + host-path virtiofs
-	// shares the committed vm.yml deliberately omits, so the portable entity
+	// shares the committed charly.yml deliberately omits, so the portable entity
 	// attaches this host's real devices for a live run. No-op when absent.
 	ovr, err := LoadVmInstanceOverride(vmDomainName)
 	if err != nil {
@@ -138,7 +138,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		}
 	}
 
-	// For cloud_image sources, always (re)render the seed ISO so vm.yml edits
+	// For cloud_image sources, always (re)render the seed ISO so charly.yml edits
 	// (cloud_init packages/runcmd/network-config/etc.) take effect on `charly vm
 	// create` without forcing an explicit `charly vm build`. The qcow2 disk is
 	// left alone — only the seed ISO is cheap to rebuild. On the deploy path this
@@ -148,7 +148,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		if err := RegenerateSeedISO(spec, seedISOAbs, vmStateDir, vmState); err != nil {
 			return fmt.Errorf("regenerating seed ISO: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Regenerated cloud-init seed ISO from vm.yml\n")
+		fmt.Fprintf(os.Stderr, "Regenerated cloud-init seed ISO from charly.yml\n")
 	}
 	// For iso sources, resolve the installer image the domain boots as its SECOND cdrom.
 	//

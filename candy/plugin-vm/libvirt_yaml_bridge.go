@@ -2,7 +2,7 @@ package vm
 
 // YAML ↔ libvirt XML bridge.
 //
-// Converts opencharly's YAML-facing LibvirtDomain (authored in vm.yml
+// Converts opencharly's YAML-facing LibvirtDomain (authored in charly.yml
 // as the `libvirt:` stanza) into libvirt.org/go/libvirtxml's Domain —
 // the type system used to marshal the actual libvirt domain XML.
 //
