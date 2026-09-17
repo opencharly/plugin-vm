@@ -26,9 +26,8 @@ import (
 //     data also injects `runcmd: cloud-init clean --machine-id --logs`
 //     so the guest re-runs identity setup on first boot.
 //
-//   - writeVmCloneDeclaration — invoked by `charly vm clone` to persist a
-//     kind:vm entry into charly.yml. Pure config-file
-//     mutation; no disk operations.
+// The `charly vm clone` verb is RETIRED (the clone is authored on the DEPLOY via
+// `from: <src>:<snapshot>`); BuildClone is driven by `charly vm build`.
 
 // snapshotBackingStale walks a snapshot's qcow2 backing chain and reports the
 // first backing file whose mtime is NEWER than the snapshot's capture time
@@ -254,21 +253,6 @@ func appendCloudInitClean(existing []string) []string {
 		return existing
 	}
 	return append(existing, cleanCmd)
-}
-
-// findOrCreateMapEntry locates a top-level map key in a mapping node
-// and returns its value mapping. If absent, appends a fresh empty
-// mapping and returns it.
-func findOrCreateMapEntry(parent *yaml.Node, key string) *yaml.Node {
-	for i := 0; i+1 < len(parent.Content); i += 2 {
-		if parent.Content[i].Value == key && parent.Content[i+1].Kind == yaml.MappingNode {
-			return parent.Content[i+1]
-		}
-	}
-	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
-	valNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	parent.Content = append(parent.Content, keyNode, valNode)
-	return valNode
 }
 
 // alreadyHas reports whether a mapping node has the given key.

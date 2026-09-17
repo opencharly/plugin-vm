@@ -14,7 +14,7 @@ import (
 // sibling to the SSH key, NVRAM, and console socket already kept
 // there. The presence of this file lets an operator override the
 // project-level VM classification for their specific instance
-// without modifying the project's charly.yml or vm.yml.
+// without modifying the project's charly.yml.
 //
 // The override carries `disposable:` / `lifecycle:` (the two fields
 // that gate `charly update <vm-entity>`) AND a `libvirt:` block — a
@@ -24,7 +24,7 @@ import (
 // a PCI `<hostdev>` (the GPU's bus/slot address is host-specific) and
 // a virtiofs `<filesystem>` share rooted at an absolute host path
 // (e.g. /home/<operator>). Keeping these in the home overlay — never
-// the committed `vm.yml` — lets the project's VM entities stay PORTABLE
+// the committed `charly.yml` — lets the project's VM entities stay PORTABLE
 // (no PCI address, no operator-home path baked into version control)
 // while this host attaches its real GPU + shares for a live run. Future
 // fields (per-instance ports, env, add_candy) can be added without
@@ -62,7 +62,7 @@ type VmInstanceOverride struct {
 	// device categories are merged: `devices.hostdevs` (PCI passthrough —
 	// the address is host-specific) and `devices.filesystems` (virtiofs
 	// shares rooted at an absolute host path). Both APPEND to whatever the
-	// portable repo `vm.yml` already declares, so the committed entity
+	// portable repo `charly.yml` already declares, so the committed entity
 	// carries no host-specific identity.
 	Libvirt *LibvirtDomain `yaml:"libvirt,omitempty" json:"libvirt,omitempty"`
 }
@@ -128,7 +128,7 @@ func (o *VmInstanceOverride) ApplyToVmClassification(disposable bool, lifecycle 
 // Only the HOST-SPECIFIC device categories are merged — `devices.hostdevs`
 // (PCI passthrough, a host-specific bus/slot address) and `devices.filesystems`
 // (virtiofs shares rooted at an absolute host path) — and they APPEND to
-// whatever the portable repo vm.yml already declares. This is what lets the
+// whatever the portable repo charly.yml already declares. This is what lets the
 // committed `kind: vm` entity stay free of any PCI address or operator-home
 // path: the project ships the portable shape, the operator's home overlay
 // supplies this host's GPU + shares.

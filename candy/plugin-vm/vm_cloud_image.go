@@ -139,7 +139,7 @@ func BuildCloudImage(
 	// ONLY when the source signature drifted (a rotated `latest` upstream → new base sha, or a
 	// changed disk_size/url) or --force is set. A fresh base is left untouched so a live
 	// per-domain overlay that already backs onto it is never mutated. The seed ISO below is
-	// cheap + non-hazardous and is always (re)rendered so a vm.yml cloud_init edit still takes
+	// cheap + non-hazardous and is always (re)rendered so a charly.yml cloud_init edit still takes
 	// effect.
 	sig := vmBuildStamp{BaseSHA256: fetched.SHA256, DiskSize: spec.DiskSize, SourceURL: spec.Source.URL}
 	if !force && diskBaseFresh(outputDir, diskPath, sig) {
@@ -211,7 +211,7 @@ func BuildCloudImage(
 
 // RegenerateSeedISO re-renders cloud-init user-data/meta-data/network-config
 // from the current VmSpec and overwrites the seed ISO in place. Used by
-// `charly vm create` to pick up vm.yml edits (new runcmd entries, packages,
+// `charly vm create` to pick up charly.yml edits (new runcmd entries, packages,
 // network config, etc.) without requiring a full `charly vm build` rerun.
 //
 // The qcow2 disk is left untouched — only the seed ISO is regenerated, which is cheap.

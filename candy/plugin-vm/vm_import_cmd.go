@@ -15,20 +15,20 @@ type VmImportCmd struct {
 	// or --list is set.
 	Domain string `arg:"" optional:"" help:"Libvirt domain name to adopt (e.g. as listed by 'virsh -c qemu:///session list --all'). Omit when using --all or --list."`
 
-	// TargetName overrides the vm.yml entry key. Default: domain name
+	// TargetName overrides the charly.yml entry key. Default: domain name
 	// with any "charly-" prefix stripped.
-	TargetName string `name:"target-name" help:"Override the kind:vm entry name in vm.yml"`
+	TargetName string `name:"target-name" help:"Override the kind:vm entry name in charly.yml"`
 
-	// All adopts every libvirt domain not already in vm.yml.
+	// All adopts every libvirt domain not already in charly.yml.
 	All bool `name:"all" help:"Adopt every unmanaged libvirt domain"`
 
-	// List shows libvirt domains absent from vm.yml without writing
+	// List shows libvirt domains absent from charly.yml without writing
 	// anything. Diagnostic mode.
-	List bool `name:"list" help:"Show libvirt domains absent from vm.yml; do not write"`
+	List bool `name:"list" help:"Show libvirt domains absent from charly.yml; do not write"`
 
 	// ShowDrift, used with --list, marks entries whose libvirt XML
-	// has diverged from the on-disk vm.yml entry.
-	ShowDrift bool `name:"show-drift" help:"With --list: mark entries whose libvirt XML diverges from vm.yml"`
+	// has diverged from the on-disk charly.yml entry.
+	ShowDrift bool `name:"show-drift" help:"With --list: mark entries whose libvirt XML diverges from charly.yml"`
 
 	// Update re-reads libvirt XML for an existing entry and overwrites
 	// only source-derived fields, preserving operator-authored
@@ -37,8 +37,8 @@ type VmImportCmd struct {
 	Update bool `name:"update" help:"Re-read libvirt XML and update an existing kind:vm entry in place"`
 
 	// Diff prints the field-level differences between libvirt XML and
-	// the on-disk vm.yml entry, without writing.
-	Diff bool `name:"diff" help:"Print drift between libvirt XML and vm.yml without writing"`
+	// the on-disk charly.yml entry, without writing.
+	Diff bool `name:"diff" help:"Print drift between libvirt XML and charly.yml without writing"`
 
 	// ReplaceLibvirt, used with --update, drops the operator-authored
 	// libvirt: block (defaults preserve it).
@@ -184,7 +184,7 @@ func stripCharlyPrefix(s string) string {
 	return s
 }
 
-// scanDriftAcrossImports scans every kind:vm entry in vm.yml /
+// scanDriftAcrossImports scans every kind:vm entry in charly.yml
 // charly.yml whose source.kind is "imported", and runs DiffImported
 // against each. Returns rows of (entry-name, drift-summary) for the
 // `--list --show-drift` table. Entries with no drift are omitted.

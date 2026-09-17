@@ -51,7 +51,7 @@ func vfioGpuToHostdevs(members []VFIOPCIDevice) []LibvirtHostdev {
 	return out
 }
 
-// specHasHostdev / ovrHasHostdev report whether a committed vm.yml spec or a
+// specHasHostdev / ovrHasHostdev report whether a committed charly.yml spec or a
 // per-host instance.yml override already carries a hostdev — in which case
 // auto-allocation defers to it (operator authority; no double-inject).
 func specHasHostdev(spec *VmSpec) bool {
@@ -84,7 +84,7 @@ func requiredGPUResource(cnode *DeployNode, resources map[string]*ResolvedResour
 // resource defined in the embedded `resource:` vocabulary (charly/charly.yml),
 // it:
 //
-//   - defers to any operator-authored hostdev (vm.yml spec OR instance.yml
+//   - defers to any operator-authored hostdev (charly.yml spec OR instance.yml
 //     overlay) — no double-inject, no re-detection;
 //   - else requires backend libvirt (PCI <hostdev> renders only there);
 //   - else DetectVFIO + selectGPUByVendor → on hit, persist the whole
@@ -113,7 +113,7 @@ func autoAllocateExclusiveGPUs(spec *VmSpec, ovr *VmInstanceOverride, cnode *Dep
 	}
 	vendor := normalizePCIVendor(sel.Vendor)
 
-	// Operator-authored hostdev wins (committed vm.yml or instance.yml). Per
+	// Operator-authored hostdev wins (committed charly.yml or instance.yml). Per
 	// the locked design: persisted block is treated as authoritative — delete
 	// it to force re-detection.
 	if specHasHostdev(spec) || ovrHasHostdev(ovr) {

@@ -5,7 +5,7 @@ package vm
 // go-libvirt) and for `charly check libvirt`.
 //
 // ResolveVmTarget opens a session-scoped libvirt connection, finds
-// the running domain whose name matches the vm.yml entity, and
+// the running domain whose name matches the charly.yml entity, and
 // parses its live XML via libvirtxml. Callers get:
 //
 //   - A libvirt connection they can use for further RPCs
@@ -15,7 +15,7 @@ package vm
 //   - Convenience methods: SpiceAddress(), AgentReachable().
 //
 // Error taxonomy (surfaces the same wording to both commands):
-//   - Unknown vm-name: "no vm.yml entity named <name>; known: …"
+//   - Unknown vm-name: "no charly.yml entity named <name>; known: …"
 //   - Stopped domain: "domain <dom> is not running; start with
 //     `charly vm start <name>`"
 //   - No graphics stanza of matching type: "VM <name> has no <kind>
@@ -39,15 +39,15 @@ type VmTarget struct {
 	Conn    *libvirtConn       // shared connection wrapper
 	Domain  libvirt.Domain     // libvirt handle
 	XML     *libvirtxml.Domain // parsed live XML
-	Spec    *VmSpec            // vm.yml entity
-	VmName  string             // vm.yml key
+	Spec    *VmSpec            // charly.yml entity
+	VmName  string             // charly.yml key
 	DomName string             // libvirt domain name (typically "charly-<vmName>")
 	Uri     string             // libvirt URI used to resolve this target (empty = local)
 }
 
 // ResolveVmTarget opens a libvirt connection (local by default or
 // remote when uri is qemu+ssh://…) and resolves the running domain
-// for a vm.yml entity. Caller must Close() the returned target.
+// for a charly.yml entity. Caller must Close() the returned target.
 //
 // The domain-name convention matches `charly vm start`: "charly-<vmName>".
 // For entity names already prefixed with "charly-" (rare), the prefix is
@@ -291,7 +291,7 @@ func (t *VmTarget) AgentReachable(timeout time.Duration) bool {
 }
 
 // vmDomainNameFor returns the libvirt domain name convention for a
-// vm.yml entity. Matches `charly vm start`'s naming.
+// charly.yml entity. Matches `charly vm start`'s naming.
 func vmDomainNameFor(vmName string) string {
 	if strings.HasPrefix(vmName, "charly-") {
 		return vmName

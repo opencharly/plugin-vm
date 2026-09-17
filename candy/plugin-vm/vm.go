@@ -217,10 +217,10 @@ func (c *VmCreateCmd) Run() error {
 
 	// Reached here = image is not a `kind: vm` entity.
 	return fmt.Errorf(
-		"VM %q has no kind:vm entity in vm.yml.\n"+
+		"VM %q has no kind:vm entity in charly.yml.\n"+
 			"  Declare one (optionally paired with a bootc image), e.g.:\n"+
-			"      vm:\n"+
-			"        %s-bootc:\n"+
+			"      %s-bootc:\n"+
+			"        vm:\n"+
 			"          source: {kind: bootc, image: %s}",
 		c.Box, c.Box, c.Box)
 }
