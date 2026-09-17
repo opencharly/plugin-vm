@@ -207,9 +207,30 @@ func mapVcpuToSpec(v libvirtVcpuForImport, spec *VmSpec) {
 	}
 }
 
+// normalizeImportedMachine maps libvirt's raw machine type (e.g. "pc-q35-11.1",
+// "pc-i440fx-8.2") onto the charly schema's closed enum ("q35" | "virt" | "i440fx" | "pc").
+// The import writer copies libvirt state verbatim, and libvirt reports a VERSIONED machine
+// string the schema rejects — so the emitted charly.yml would fail to load. An unrecognized
+// machine is dropped (empty) rather than written as a schema-invalid value.
+func normalizeImportedMachine(m string) string {
+	lm := strings.ToLower(m)
+	switch {
+	case strings.Contains(lm, "q35"):
+		return "q35"
+	case strings.Contains(lm, "i440fx"):
+		return "i440fx"
+	case lm == "virt":
+		return "virt"
+	case lm == "pc" || strings.HasPrefix(lm, "pc-"):
+		return "pc"
+	default:
+		return "" // unknown: drop rather than emit a schema-invalid value
+	}
+}
+
 func mapOSToSpec(os libvirtOSForImport, spec *VmSpec) {
 	if os.Type.Machine != "" {
-		spec.Machine = os.Type.Machine
+		spec.Machine = normalizeImportedMachine(os.Type.Machine)
 	}
 	if os.Loader == nil {
 		spec.Firmware = "bios"
@@ -415,42 +436,8 @@ func UpdateImportedVm(name, domainName string, replaceLibvirt bool) (*VmSpec, er
 		return nil, fmt.Errorf("%s: top-level YAML is not a mapping", target)
 	}
 	topMap := root.Content[0]
-	// NAME-FIRST: the vm body lives under `<name>: { vm: { … } }` (a legacy top-level
-	// `vm:` map is a hard load error since the schema-compaction cutover).
-	nameNode := findMapEntryByKey(topMap, name)
-	if nameNode == nil {
-		return nil, fmt.Errorf("%s: no entry %q to update; run `charly vm import %s` first", target, name, domainName)
-	}
-	entryNode := findMapEntryByKey(nameNode, "vm")
-	if entryNode == nil {
-		return nil, fmt.Errorf("%s: entry %q has no `vm:` kind node to update", target, name)
-	}
-
-	// Preserve adopted_at from existing entry; preserve operator-
-	// authored sub-mappings.
-	preservedAdoptedAt := readSourceField(entryNode, "adopted_at")
-	if preservedAdoptedAt != "" {
-		freshSpec.Source.AdoptedAt = preservedAdoptedAt
-	}
-
-	// Overwrite source-derived fields field-by-field, preserving any
-	// operator-added sibling keys at the top level (libvirt:, ssh:,
-	// snapshots:, cloud_init:, etc.).
-	replaceMapEntryByKey(entryNode, "source", buildImportedSourceNode(freshSpec))
-	replaceScalarByKey(entryNode, "ram", freshSpec.Ram)
-	replaceIntByKey(entryNode, "cpu", freshSpec.Cpus)
-	replaceScalarByKey(entryNode, "machine", freshSpec.Machine)
-	replaceScalarByKey(entryNode, "firmware", freshSpec.Firmware)
-	if freshSpec.Network != nil {
-		netNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		addStrPair(netNode, "mode", freshSpec.Network.Mode)
-		replaceMapEntryByKey(entryNode, "network", netNode)
-	}
-	if replaceLibvirt {
-		// V1 doesn't render a libvirt-block from imported VMs (the
-		// renderer reads from libvirt directly), so when caller asks
-		// to "replace", we drop the existing libvirt: key entirely.
-		removeMapEntryByKey(entryNode, "libvirt")
+	if err := mergeImportedVmIntoDoc(topMap, name, domainName, freshSpec, replaceLibvirt); err != nil {
+		return nil, err
 	}
 
 	// Re-marshal with 4-space indent matching charly.yml's style.
@@ -469,6 +456,46 @@ func UpdateImportedVm(name, domainName string, replaceLibvirt bool) (*VmSpec, er
 		return nil, fmt.Errorf("renaming %s → %s: %w", tmp, target, err)
 	}
 	return freshSpec, nil
+}
+
+// mergeImportedVmIntoDoc applies the freshly-read spec's source-derived fields onto the
+// NAME-FIRST entry `<name>: { vm: { … } }` in the document's top-level mapping, preserving
+// operator-authored siblings. PURE (no filesystem) so the name-first merge — including the
+// name-first LOOKUP and the `cpu:` spelling — is unit-testable; UpdateImportedVm is the
+// thin file read/write wrapper around it.
+//
+// NAME-FIRST: the vm body lives under `<name>.vm` (a legacy top-level `vm:` map is a hard
+// load error since the schema-compaction cutover), so the lookup walks TWO levels.
+func mergeImportedVmIntoDoc(topMap *yaml.Node, name, domainName string, freshSpec *VmSpec, replaceLibvirt bool) error {
+	nameNode := findMapEntryByKey(topMap, name)
+	if nameNode == nil {
+		return fmt.Errorf("no entry %q to update; run `charly vm import %s` first", name, domainName)
+	}
+	entryNode := findMapEntryByKey(nameNode, "vm")
+	if entryNode == nil {
+		return fmt.Errorf("entry %q has no `vm:` kind node to update", name)
+	}
+
+	// Preserve adopted_at from the existing entry.
+	if preserved := readSourceField(entryNode, "adopted_at"); preserved != "" {
+		freshSpec.Source.AdoptedAt = preserved
+	}
+
+	// Overwrite source-derived fields field-by-field, preserving operator-authored siblings.
+	replaceMapEntryByKey(entryNode, "source", buildImportedSourceNode(freshSpec))
+	replaceScalarByKey(entryNode, "ram", freshSpec.Ram)
+	replaceIntByKey(entryNode, "cpu", freshSpec.Cpus)
+	replaceScalarByKey(entryNode, "machine", freshSpec.Machine)
+	replaceScalarByKey(entryNode, "firmware", freshSpec.Firmware)
+	if freshSpec.Network != nil {
+		netNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		addStrPair(netNode, "mode", freshSpec.Network.Mode)
+		replaceMapEntryByKey(entryNode, "network", netNode)
+	}
+	if replaceLibvirt {
+		removeMapEntryByKey(entryNode, "libvirt")
+	}
+	return nil
 }
 
 // DiffImported compares the live libvirt XML against the on-disk

@@ -3,6 +3,7 @@ package vm
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -68,5 +69,117 @@ func TestWriteVmImportDeclaration_NameFirstShape(t *testing.T) {
 	}
 	if _, ok := vmBody["cpu"]; !ok {
 		t.Errorf("writer omitted `cpu:`\n%s", string(raw))
+	}
+}
+
+// TestMergeImportedVmIntoDoc_NameFirstUpdate is the R7 coverage for the UPDATE path's
+// name-first rewrite: mergeImportedVmIntoDoc must locate `<name>.vm` (NOT a top-level `vm:`
+// map) and write the cpu count under `cpu:` (NOT `cpus:`). A pre-fix shape (top-level map /
+// `cpus:`) fails this.
+func TestMergeImportedVmIntoDoc_NameFirstUpdate(t *testing.T) {
+	raw := `version: 2026.249.2125
+my-vm:
+    vm:
+        source:
+            kind: imported
+            libvirt_name: old
+            disk_path: /old.qcow2
+            disk_format: qcow2
+        ram: 1G
+        cpu: 1
+        ssh: {user: user}
+`
+	var doc map[string]yaml.Node
+	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	root := &yaml.Node{}
+	if err := yaml.Unmarshal([]byte(raw), root); err != nil {
+		t.Fatal(err)
+	}
+	topMap := root.Content[0]
+
+	fresh := &VmSpec{Ram: "8G", Cpus: 4, Machine: "q35", Firmware: "uefi-insecure"}
+	fresh.Source.Kind = "imported"
+	fresh.Source.LibvirtName = "new-dom"
+	fresh.Source.DiskPath = "/new.qcow2"
+	fresh.Source.DiskFormat = "qcow2"
+	fresh.Source.AdoptedAt = "" // should be preserved from the existing entry
+	if err := mergeImportedVmIntoDoc(topMap, "my-vm", "my-vm", fresh, false); err != nil {
+		t.Fatalf("mergeImportedVmIntoDoc: %v", err)
+	}
+	out, err := yaml.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]yaml.Node
+	if err := yaml.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := got["vm"]; bad {
+		t.Fatalf("update wrote a legacy top-level `vm:` map:\n%s", out)
+	}
+	entry := got["my-vm"]
+	var body map[string]yaml.Node
+	if err := entry.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	var vmBody map[string]yaml.Node
+	vmn := body["vm"]
+	if err := vmn.Decode(&vmBody); err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := vmBody["cpus"]; bad {
+		t.Errorf("update wrote `cpus:` — the schema field is `cpu:`:\n%s", out)
+	}
+	if got := vmBody["cpu"].Value; got != "4" {
+		t.Errorf("cpu = %q, want 4:\n%s", got, out)
+	}
+	if got := vmBody["ram"].Value; got != "8G" {
+		t.Errorf("ram = %q, want 8G", got)
+	}
+	// operator-authored sibling preserved
+	if _, ok := vmBody["ssh"]; !ok {
+		t.Errorf("operator-authored `ssh:` sibling was dropped:\n%s", out)
+	}
+}
+
+// TestMergeImportedVmIntoDoc_MissingEntryNamesIt proves the update path names a missing entry
+// (not a silent no-op).
+func TestMergeImportedVmIntoDoc_MissingEntryNamesIt(t *testing.T) {
+	root := &yaml.Node{}
+	if err := yaml.Unmarshal([]byte("version: 2026.249.2125\n"), root); err != nil {
+		t.Fatal(err)
+	}
+	err := mergeImportedVmIntoDoc(root.Content[0], "absent", "absent", &VmSpec{}, false)
+	if err == nil {
+		t.Fatal("a missing entry must error")
+	}
+	if !strings.Contains(err.Error(), "no entry") {
+		t.Fatalf("error = %v, want it to name the missing entry", err)
+	}
+}
+
+// TestMapOSToSpec_NormalizesMachine exercises the CALL SITE (mapOSToSpec), so reverting the
+// normalization there fails this test — `charly vm import` copies libvirt state verbatim, and
+// libvirt reports a VERSIONED machine string ("pc-q35-11.1") the schema's closed enum rejects,
+// so the emitted config would fail to load.
+func TestMapOSToSpec_NormalizesMachine(t *testing.T) {
+	cases := map[string]string{
+		"pc-q35-11.1":   "q35",
+		"pc-q35-8.2":    "q35",
+		"q35":           "q35",
+		"pc-i440fx-8.2": "i440fx",
+		"i440fx":        "i440fx",
+		"pc":            "pc",
+		"virt":          "virt",
+		"weird-unknown": "", // dropped, never emitted as a schema-invalid value
+	}
+	for in, want := range cases {
+		var s VmSpec
+		mapOSToSpec(libvirtOSForImport{Type: libvirtOSTypeForImport{Machine: in}}, &s)
+		if s.Machine != want {
+			t.Errorf("mapOSToSpec(machine=%q) -> Machine %q, want %q", in, s.Machine, want)
+		}
 	}
 }

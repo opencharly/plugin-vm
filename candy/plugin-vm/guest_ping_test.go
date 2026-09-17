@@ -125,3 +125,24 @@ func TestTerminalDomainState_OneDefinition(t *testing.T) {
 		}
 	}
 }
+
+// TestInvokeDomainState_UnreachableIsTerminal proves the `domain-state` DISPATCH branch (not
+// just the pure helper) reaches the terminal verdict on a live connect failure, so reverting the
+// dispatch to the old inline maps (which omitted `failed`) fails this test.
+func TestInvokeDomainState_UnreachableIsTerminal(t *testing.T) {
+	env, _ := json.Marshal(vmEnv{VmOp: "domain-state", VmName: "charly-does-not-exist", URI: "qemu+tcp://127.0.0.1:1/system"})
+	reply, err := vmProvider{}.Invoke(t.Context(), &pb.InvokeRequest{Op: "run", Reserved: "libvirt", EnvJson: env})
+	if err != nil {
+		t.Fatalf("Invoke(domain-state) error = %v", err)
+	}
+	var got domainStateReply
+	if uerr := json.Unmarshal(reply.GetResultJson(), &got); uerr != nil {
+		t.Fatalf("decode reply: %v", uerr)
+	}
+	if got.Running || got.Exists {
+		t.Fatalf("an unreachable libvirt must not report exists/running, got %+v", got)
+	}
+	if !got.Failed || got.State != "unreachable" {
+		t.Fatalf("an unreachable libvirt must be a TERMINAL domain-state verdict (failed, state=unreachable), got %+v", got)
+	}
+}
