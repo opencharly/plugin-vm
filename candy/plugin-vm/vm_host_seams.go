@@ -135,6 +135,13 @@ func hostConfigResolve(entity, claimantID string) (resolvedConfig, error) {
 						return resolvedConfig{}, fmt.Errorf("applying vm defaults for %q: %w", entity, derr)
 					}
 					vm.Raw = savedRaw
+					// Per-deploy VM-shape override (ram/cpu): the deploy node's own
+					// fields, inherited along its from: chain, over the template's —
+					// the capability that lets many deploys share ONE template at
+					// different sizes instead of duplicating it (R3). A no-op when
+					// nothing in the chain declares a shape.
+					ovrRam, ovrCpus := vmShapeOverride(uf, entity, claimantID)
+					applyVmShapeOverride(vm, ovrRam, ovrCpus)
 					cfg.VM = vm
 				}
 			}
