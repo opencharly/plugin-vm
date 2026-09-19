@@ -86,17 +86,19 @@ func lookupDeployByIdentity(tree map[string]spec.DeployNode, identity string) (s
 	return spec.DeployNode{}, false
 }
 
-// applyVmShapeOverride folds the resolved chain override onto a template-resolved spec,
+// applyVmShapeOverride folds the resolved chain override onto a template-resolved VM spec,
 // leaving the template value in place for whichever field the chain did not state. A no-op
-// ("",0) leaves spec untouched, so a deploy with no override boots exactly the template.
-func applyVmShapeOverride(spec *VmSpec, ram string, cpus int) {
-	if spec == nil {
+// ("",0) leaves dst untouched, so a deploy with no override boots exactly the template.
+// (dst, not spec: the file imports github.com/opencharly/spec/spec, and a `spec` parameter
+// would shadow that package.)
+func applyVmShapeOverride(dst *VmSpec, ram string, cpus int) {
+	if dst == nil {
 		return
 	}
 	if ram != "" {
-		spec.Ram = ram
+		dst.Ram = ram
 	}
 	if cpus > 0 {
-		spec.Cpus = cpus
+		dst.Cpus = cpus
 	}
 }
