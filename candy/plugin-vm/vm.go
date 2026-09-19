@@ -209,6 +209,11 @@ func (c *VmCreateCmd) Run() error {
 	}
 
 	if reply.VM != nil {
+		// Explicit CLI shape override (--ram/--cpus) wins over the deploy's own chain
+		// fields — flags > deploy-from > template. Both flags were declared but never
+		// read, so passing them silently did nothing (a false help-text claim); wiring
+		// them completes the same shape-override mechanism the deploy fields drive.
+		applyVmShapeOverride(reply.VM, c.Ram, c.Cpus)
 		// VmSpec-driven create pipeline: RenderDomain for libvirt, RenderQemuArgv for qemu. Uses
 		// <vm.image_dir>/{disk,seed} produced by `charly vm build`. claimantNode + resources drive GPU
 		// auto-allocation (gpu_allocate.go).
