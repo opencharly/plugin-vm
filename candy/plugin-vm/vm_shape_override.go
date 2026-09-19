@@ -11,9 +11,9 @@ import (
 // authorable on a `from:` VM deploy before this, but no VM code read them, so every deploy
 // was pinned to the template's shape. That forced a consumer with a different sizing need (a
 // lean 16-lane eval clone vs the full keeper) to duplicate the WHOLE template in its own repo
-// (R3) instead of deriving. Every VM-shape surface now reads the same spellings — `#Deploy`,
-// `#Vm` and `#VmVariant` all use `cpu:`/`ram:` (the deploy and variant arms were the plural
-// outliers `cpus:`/`memory:` until this cutover); the reader landed alongside that alignment.
+// (R3) instead of deriving. The VM-shape spellings now match `#Vm`'s own (`cpu:`/`ram:`) —
+// the deploy arm was the plural outlier `cpus:` until this cutover — and the reader landed
+// alongside that alignment.
 //
 // Semantics — INHERITANCE along the `from:` chain, nearest-wins:
 //
@@ -25,8 +25,7 @@ import (
 //
 // Only cpu/ram are overridable, and #Deploy carries no disk_size at all for this reason: the
 // base disk is built ONCE per ENTITY and shared read-only by every deploy (per-domain COW
-// overlays), so a per-deploy disk size could not resize an already-built disk. #VmVariant
-// draws the same line (cpu/ram/video/gpu — no disk identity).
+// overlays), so a per-deploy disk size could not resize an already-built disk.
 
 // vmShapeOverride returns the effective (ram, cpus) for a VM deploy, walking its from:
 // chain from the deploy being created up to (not including) the terminal template. entity
