@@ -13,12 +13,12 @@ import (
 // -> this test FAILS.
 func TestShouldRepackIsoAnswersSkipsGoldenClone(t *testing.T) {
 	// An UNATTENDED iso spec (it authors source.installer) is the re-pack case.
-	spec := &VmSpec{Source: VmSource{Kind: "iso", Installer: &spec.VmInstaller{Password_hash: "$6$x$y"}}}
-	if shouldRepackIsoAnswers(spec, true, "/some/seed.iso", true) {
+	unattended := &VmSpec{Source: VmSource{Kind: "iso", Installer: &spec.VmInstaller{Password_hash: "$6$x$y"}}}
+	if shouldRepackIsoAnswers(unattended, true, "/some/seed.iso", true) {
 		t.Fatal("golden clone must SKIP the iso answers re-pack")
 	}
 	// Control: a plain (non-clone) disk must re-pack.
-	if !shouldRepackIsoAnswers(spec, true, "/some/seed.iso", false) {
+	if !shouldRepackIsoAnswers(unattended, true, "/some/seed.iso", false) {
 		t.Fatal("a plain disk must re-pack the iso answers")
 	}
 	// A CONSOLE-mode iso spec (no source.installer) has NO answers volume, so the
