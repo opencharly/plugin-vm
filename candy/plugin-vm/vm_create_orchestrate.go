@@ -124,7 +124,11 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		// only with the DOMAIN's. Without this the volume was omitted from the domain
 		// entirely and the installer fell back to its interactive wizard — caught by
 		// check-omarchy-iso-vm, which is exactly what that bed is for.
-		if spec.Source.Kind == "iso" {
+		// A CONSOLE-mode iso VM has NO answers volume at all (it boots the
+		// medium's interactive installer), so it must have NO seed path — the
+		// domain definition would otherwise reference a seed.iso that the build
+		// never created and libvirt would refuse to start the domain.
+		if spec.Source.Kind == "iso" && !isoConsoleMode(spec) {
 			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
 		}
 	} else {
