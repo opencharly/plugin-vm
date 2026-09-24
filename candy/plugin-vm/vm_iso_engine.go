@@ -23,6 +23,25 @@ type IsoBuildResult struct {
 	SeedFiles       []string
 }
 
+// isoConsoleMode reports whether an iso VM is in CONSOLE mode: the entity
+// authored NO `source.installer`, so the medium boots its own INTERACTIVE
+// installer (driven over the console) instead of an unattended answer-file
+// install. It is PURE over the spec, so the decision is unit-testable without a
+// build.
+func isoConsoleMode(vmSpec *VmSpec) bool {
+	return vmSpec.Source.Installer == nil
+}
+
+// isoDistroInstallerRequired reports whether the resolved distro MUST declare an
+// installer: answer format. It is required only when an UNATTENDED install will
+// run — i.e. the entity authored source.installer — AND the distro has none.
+// A console-mode VM boots the medium's own interactive installer, so the distro's
+// answer format is irrelevant to it. PURE, so the guard is unit-testable without a
+// build or a project load.
+func isoDistroInstallerRequired(distro *DistroDef, vmSpec *VmSpec) bool {
+	return distro.Installer == nil && !isoConsoleMode(vmSpec)
+}
+
 // BuildIsoVM builds a VM from a distro's OFFICIAL INSTALLER ISO, run fully unattended.
 //
 // It is the fourth sibling of BuildCloudImage / BuildBootcVM / BuildBootstrapVM, and it
@@ -40,15 +59,6 @@ type IsoBuildResult struct {
 // So this function does four things: fetch and verify the ISO, render the answers, write
 // them to a labelled volume, and allocate a blank disk. The install itself happens when
 // the domain first boots, which is `vm create`'s job, not this one's.
-// isoConsoleMode reports whether an iso VM is in CONSOLE mode: the entity
-// authored NO `source.installer`, so the medium boots its own INTERACTIVE
-// installer (driven over the console) instead of an unattended answer-file
-// install. It is PURE over the spec, so the decision is unit-testable without a
-// build.
-func isoConsoleMode(vmSpec *VmSpec) bool {
-	return vmSpec.Source.Installer == nil
-}
-
 func BuildIsoVM(
 	vmSpec *VmSpec,
 	outputDir, vmStateDir string,
@@ -116,21 +126,8 @@ func BuildIsoVM(
 	// the console-wizard recipe, so the medium boots to its own first prompt and nothing
 	// on the seed could be honoured anyway.
 	if console {
-		sig := vmBuildStamp{
-			BaseSHA256: fetched.SHA256,
-			DiskSize:   vmSpec.DiskSize,
-			SourceURL:  vmSpec.Source.URL,
-		}
-		if !force && diskBaseFresh(outputDir, diskPath, sig) {
-			fmt.Fprintf(os.Stderr, "Disk %s is content-fresh — leaving it alone\n", diskPath)
-		} else {
-			_ = os.Remove(diskPath)
-			if err := qemuImgCreateBlank(diskPath, vmSpec.DiskSize); err != nil {
-				return IsoBuildResult{}, err
-			}
-			if err := writeVmBuildStamp(outputDir, sig); err != nil {
-				return IsoBuildResult{}, fmt.Errorf("writing build stamp: %w", err)
-			}
+		if err := ensureBlankDisk(outputDir, diskPath, fetched, vmSpec, force); err != nil {
+			return IsoBuildResult{}, err
 		}
 		fmt.Fprintf(os.Stderr, "Console-install mode: no answers volume; boot the medium and drive its interactive installer\n")
 		return IsoBuildResult{
@@ -174,22 +171,8 @@ func BuildIsoVM(
 	// but ruinous to remake, because after the install it is no longer blank — it is the
 	// guest. Recreating it silently would destroy an installed system. The stamp is the
 	// same mechanism BuildCloudImage uses to protect a base a live overlay backs onto.
-	sig := vmBuildStamp{
-		BaseSHA256: fetched.SHA256,
-		DiskSize:   vmSpec.DiskSize,
-		SourceURL:  vmSpec.Source.URL,
-	}
-	if !force && diskBaseFresh(outputDir, diskPath, sig) {
-		fmt.Fprintf(os.Stderr, "Disk %s is content-fresh (installer sha256=%s) — leaving it alone\n", diskPath, fetched.SHA256)
-	} else {
-		_ = os.Remove(diskPath)
-		if err := qemuImgCreateBlank(diskPath, vmSpec.DiskSize); err != nil {
-			return IsoBuildResult{}, err
-		}
-		// Recorded LAST — a matching stamp then implies a COMPLETE build.
-		if err := writeVmBuildStamp(outputDir, sig); err != nil {
-			return IsoBuildResult{}, fmt.Errorf("writing build stamp: %w", err)
-		}
+	if err := ensureBlankDisk(outputDir, diskPath, fetched, vmSpec, force); err != nil {
+		return IsoBuildResult{}, err
 	}
 
 	return IsoBuildResult{
@@ -332,6 +315,33 @@ func hashPasswordSHA512(plaintext string) (string, error) {
 		return "", fmt.Errorf("openssl passwd -6 produced %d bytes that are not a $6$ SHA-512 crypt hash", len(hash))
 	}
 	return hash, nil
+}
+
+// ensureBlankDisk creates the blank disk the installer partitions, REBUILDING it
+// only when the content signature drifted or force is set. It is the ONE
+// implementation both the console path and the unattended path use (R3): a blank
+// disk is cheap to make but ruinous to remake, because after the install it is no
+// longer blank — it is the guest, and recreating it silently would destroy an
+// installed system. The stamp is written LAST, so a matching stamp implies a
+// COMPLETE build.
+func ensureBlankDisk(outputDir, diskPath string, fetched kit.FetchedImage, vmSpec *VmSpec, force bool) error {
+	sig := vmBuildStamp{
+		BaseSHA256: fetched.SHA256,
+		DiskSize:   vmSpec.DiskSize,
+		SourceURL:  vmSpec.Source.URL,
+	}
+	if !force && diskBaseFresh(outputDir, diskPath, sig) {
+		fmt.Fprintf(os.Stderr, "Disk %s is content-fresh (installer sha256=%s) — leaving it alone\n", diskPath, fetched.SHA256)
+		return nil
+	}
+	_ = os.Remove(diskPath)
+	if err := qemuImgCreateBlank(diskPath, vmSpec.DiskSize); err != nil {
+		return err
+	}
+	if err := writeVmBuildStamp(outputDir, sig); err != nil {
+		return fmt.Errorf("writing build stamp: %w", err)
+	}
+	return nil
 }
 
 // qemuImgCreateBlank allocates an empty sparse qcow2 for an installer to partition.

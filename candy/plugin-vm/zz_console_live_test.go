@@ -1,29 +1,29 @@
 package vm
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
-	"path/filepath"
 	"testing"
 )
 
 // TestBuildIsoVM_ConsoleModeLive exercises the CONSOLE branch end to end against
 // the real Omarchy ISO: a spec with NO source.installer builds a BLANK disk and
 // returns NO seed path (the medium boots its own interactive installer, driven
-// over the console). It SKIPS when the ISO is not in charly's content-addressed
-// cache — the download is 5.8 GiB — so a normal `go test` stays hermetic and the
-// skip is reported visibly rather than the boundary being faked.
+// over the console).
+//
+// It is gated on an EXPLICIT operator assertion — CHARLY_TEST_OMARCHY_ISO_CACHED=1
+// — rather than probing charly's cache layout itself. Mirroring the SDK's cache
+// key would make the test silently SKIP (a false green) the day the layout
+// changes; instead the operator asserts the ISO is cached, and the test uses the
+// REAL kit.FetchArtifact, which hits the cache. Unset → skip, reported visibly.
 func TestBuildIsoVM_ConsoleModeLive(t *testing.T) {
-	const url = "https://iso.omarchy.org/omarchy-4.0.4.iso"
-	if !isoCached(url) {
-		t.Skip("omarchy-4.0.4.iso not in charly's vm-image cache; skipping the live console build")
+	if os.Getenv("CHARLY_TEST_OMARCHY_ISO_CACHED") != "1" {
+		t.Skip("set CHARLY_TEST_OMARCHY_ISO_CACHED=1 to run the live console build against the cached Omarchy ISO")
 	}
 
 	s := &VmSpec{}
 	s.Source.Kind = "iso"
 	s.Source.Distro = "omarchy"
-	s.Source.URL = url
+	s.Source.URL = "https://iso.omarchy.org/omarchy-4.0.4.iso"
 	s.Source.Installer = nil // CONSOLE mode: no answers volume
 	s.DiskSize = "40G"
 
@@ -43,19 +43,4 @@ func TestBuildIsoVM_ConsoleModeLive(t *testing.T) {
 	if out.InstallerIsoRef == "" {
 		t.Fatal("console mode must still reference the installer ISO")
 	}
-}
-
-// isoCached reports whether the ISO for url is already in charly's vm-image
-// cache. The cache layout is the SDK's (content-addressed by sha256(url), under
-// ~/.cache/charly/vm-images), mirrored here ONLY to decide a test skip — a miss
-// would otherwise trigger a 5.8 GiB download inside `go test`.
-func isoCached(url string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	h := sha256.Sum256([]byte(url))
-	p := filepath.Join(home, ".cache", "charly", "vm-images", hex.EncodeToString(h[:])+".iso")
-	fi, err := os.Stat(p)
-	return err == nil && fi.Size() > 0
 }
