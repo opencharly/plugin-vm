@@ -53,7 +53,13 @@ func BuildIsoVM(
 	if distro == nil {
 		return IsoBuildResult{}, fmt.Errorf("iso vm: no distro resolved (source.distro is required for iso sources)")
 	}
-	if distro.Installer == nil {
+	// CONSOLE MODE: the entity authored NO `source.installer`, so this VM is NOT
+	// installed from answer files — it boots the medium to its own INTERACTIVE
+	// installer and is driven over its console (the shared console-wizard recipe,
+	// via the `spice:` verb). No answers volume is rendered; the disk is left
+	// blank for the interactive installer to partition.
+	console := vmSpec.Source.Installer == nil
+	if distro.Installer == nil && !console {
 		return IsoBuildResult{}, fmt.Errorf("iso vm: distro %q declares no installer: — it cannot be installed unattended", vmSpec.Source.Distro)
 	}
 	// kernel_args is DECLARED on the iso arm and NOT IMPLEMENTED here, so it is rejected
@@ -92,10 +98,40 @@ func BuildIsoVM(
 	diskPath := filepath.Join(outputDir, "disk.qcow2")
 	seedPath := filepath.Join(outputDir, "seed.iso")
 
-	// --- Step 2: Render the answers volume. ---
+	// --- Step 2: Render the answers volume (unattended) OR skip it (console) ---
 	// Rendered BEFORE the disk is touched. A bad seed is a hard error here rather than an
 	// installer sitting at a prompt nobody is watching, and rendering first means a
 	// failure leaves no half-built disk behind.
+	//
+	// In CONSOLE mode there is no answers volume: the interactive installer is driven by
+	// the console-wizard recipe, so the medium boots to its own first prompt and nothing
+	// on the seed could be honoured anyway.
+	if console {
+		sig := vmBuildStamp{
+			BaseSHA256: fetched.SHA256,
+			DiskSize:   vmSpec.DiskSize,
+			SourceURL:  vmSpec.Source.URL,
+		}
+		if !force && diskBaseFresh(outputDir, diskPath, sig) {
+			fmt.Fprintf(os.Stderr, "Disk %s is content-fresh — leaving it alone\n", diskPath)
+		} else {
+			_ = os.Remove(diskPath)
+			if err := qemuImgCreateBlank(diskPath, vmSpec.DiskSize); err != nil {
+				return IsoBuildResult{}, err
+			}
+			if err := writeVmBuildStamp(outputDir, sig); err != nil {
+				return IsoBuildResult{}, fmt.Errorf("writing build stamp: %w", err)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "Console-install mode: no answers volume; boot the medium and drive its interactive installer\n")
+		return IsoBuildResult{
+			DiskPath:        diskPath,
+			InstallerIsoRef: fetched.Path,
+			SeedIsoPath:     "",
+			InstallerSHA256: fetched.SHA256,
+		}, nil
+	}
+
 	seedCtx, err := installerSeedContext(vmSpec, vmStateDir)
 	if err != nil {
 		return IsoBuildResult{}, err
