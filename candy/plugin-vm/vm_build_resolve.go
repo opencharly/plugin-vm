@@ -460,7 +460,12 @@ func resolveVmBuildIsoDistro(ctx context.Context, ex *sdk.Executor, dir string, 
 		return fmt.Errorf("distro %q not declared in the embedded build vocabulary (charly/charly.yml)", vmSpec.Source.Distro)
 	}
 	distro = distroCfg.ResolveInherits(distro, 10)
-	if distro.Installer == nil {
+	// The distro's installer: block is the UNATTENDED answer format. It is required
+	// only when an unattended install will run (the entity authored
+	// `source.installer:`); a CONSOLE-mode ISO VM (no `source.installer`) boots the
+	// medium's own interactive installer and is driven over its console, so the
+	// distro need not declare an answer format at all.
+	if isoDistroInstallerRequired(distro, vmSpec) {
 		return fmt.Errorf("distro %q declares no installer: block in the embedded build vocabulary (charly/charly.yml) — it has no unattended-install answer format, so an iso source cannot run unattended against it", vmSpec.Source.Distro)
 	}
 	distroJSON, jerr := json.Marshal(distro)

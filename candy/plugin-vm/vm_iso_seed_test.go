@@ -316,3 +316,39 @@ func TestInstallerSeedContext_UnparseableDiskSizeIsRejected(t *testing.T) {
 		t.Fatalf("the error must name the field; got: %v", err)
 	}
 }
+
+// isoConsoleMode is the ONE decision that separates an unattended answer-file
+// install from an interactive console-drive. A spec with NO source.installer is
+// console mode; one WITH it is unattended. Pinned because both the build engine
+// and the distro-resolve guard branch on it.
+func TestIsoConsoleMode(t *testing.T) {
+	if !isoConsoleMode(isoSpec(nil)) {
+		t.Fatal("a spec with no source.installer must be console mode")
+	}
+	if isoConsoleMode(isoSpec(&spec.VmInstaller{Username: "user", Password_hash: "$6$x$y"})) {
+		t.Fatal("a spec WITH source.installer must NOT be console mode")
+	}
+}
+
+// isoDistroInstallerRequired is the resolve guard's predicate: a distro WITHOUT
+// an installer: answer format is rejected ONLY for an unattended spec. A
+// console-mode spec (no source.installer) is allowed, because the medium boots its
+// own interactive installer. Pinned so removing the `&& !isoConsoleMode(...)`
+// conjunct fails the test.
+func TestIsoDistroInstallerRequired(t *testing.T) {
+	installerLess := &DistroDef{}
+	withInstaller := &DistroDef{Installer: &spec.DistroInstaller{VolumeID: "cidata"}}
+
+	// Unattended + installer-less distro → required (rejected).
+	if !isoDistroInstallerRequired(installerLess, isoSpec(&spec.VmInstaller{Password_hash: "$6$x$y"})) {
+		t.Fatal("unattended against an installer-less distro must require an installer format")
+	}
+	// Console (no source.installer) + installer-less distro → NOT required (allowed).
+	if isoDistroInstallerRequired(installerLess, isoSpec(nil)) {
+		t.Fatal("a console-mode VM must NOT be rejected for an installer-less distro")
+	}
+	// A distro that DOES declare an installer format is never rejected.
+	if isoDistroInstallerRequired(withInstaller, isoSpec(&spec.VmInstaller{Password_hash: "$6$x$y"})) {
+		t.Fatal("a distro with an installer format must never be rejected")
+	}
+}
