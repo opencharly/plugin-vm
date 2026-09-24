@@ -124,7 +124,11 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		// only with the DOMAIN's. Without this the volume was omitted from the domain
 		// entirely and the installer fell back to its interactive wizard — caught by
 		// check-omarchy-iso-vm, which is exactly what that bed is for.
-		if spec.Source.Kind == "iso" {
+		// A CONSOLE-mode iso VM has NO answers volume at all (it boots the
+		// medium's interactive installer), so it must have NO seed path — the
+		// domain definition would otherwise reference a seed.iso that the build
+		// never created and libvirt would refuse to start the domain.
+		if spec.Source.Kind == "iso" && !isoConsoleMode(spec) {
 			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
 		}
 	} else {
@@ -444,6 +448,12 @@ func needsPerDomainSeed(spec *VmSpec, isGoldenClone bool) bool {
 // re-seed a booted guest). isGoldenClone is the caller's single disk probe (the ground
 // truth both the seed regeneration and this skip share).
 func shouldRepackIsoAnswers(spec *VmSpec, perDomain bool, seedISOAbs string, isGoldenClone bool) bool {
+	// A CONSOLE-mode ISO VM has NO answers volume (it boots its own interactive
+	// installer), so there is nothing to re-pack — the build wrote no seed sidecar
+	// and RepackPerDomainSeed would fail looking for one.
+	if isoConsoleMode(spec) {
+		return false
+	}
 	return spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" && !isGoldenClone
 }
 
