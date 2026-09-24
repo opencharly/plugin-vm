@@ -444,6 +444,12 @@ func needsPerDomainSeed(spec *VmSpec, isGoldenClone bool) bool {
 // re-seed a booted guest). isGoldenClone is the caller's single disk probe (the ground
 // truth both the seed regeneration and this skip share).
 func shouldRepackIsoAnswers(spec *VmSpec, perDomain bool, seedISOAbs string, isGoldenClone bool) bool {
+	// A CONSOLE-mode ISO VM has NO answers volume (it boots its own interactive
+	// installer), so there is nothing to re-pack — the build wrote no seed sidecar
+	// and RepackPerDomainSeed would fail looking for one.
+	if isoConsoleMode(spec) {
+		return false
+	}
 	return spec.Source.Kind == "iso" && perDomain && seedISOAbs != "" && !isGoldenClone
 }
 
