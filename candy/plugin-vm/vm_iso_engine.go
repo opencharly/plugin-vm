@@ -40,6 +40,15 @@ type IsoBuildResult struct {
 // So this function does four things: fetch and verify the ISO, render the answers, write
 // them to a labelled volume, and allocate a blank disk. The install itself happens when
 // the domain first boots, which is `vm create`'s job, not this one's.
+// isoConsoleMode reports whether an iso VM is in CONSOLE mode: the entity
+// authored NO `source.installer`, so the medium boots its own INTERACTIVE
+// installer (driven over the console) instead of an unattended answer-file
+// install. It is PURE over the spec, so the decision is unit-testable without a
+// build.
+func isoConsoleMode(vmSpec *VmSpec) bool {
+	return vmSpec.Source.Installer == nil
+}
+
 func BuildIsoVM(
 	vmSpec *VmSpec,
 	outputDir, vmStateDir string,
@@ -58,7 +67,7 @@ func BuildIsoVM(
 	// installer and is driven over its console (the shared console-wizard recipe,
 	// via the `spice:` verb). No answers volume is rendered; the disk is left
 	// blank for the interactive installer to partition.
-	console := vmSpec.Source.Installer == nil
+	console := isoConsoleMode(vmSpec)
 	if distro.Installer == nil && !console {
 		return IsoBuildResult{}, fmt.Errorf("iso vm: distro %q declares no installer: — it cannot be installed unattended", vmSpec.Source.Distro)
 	}

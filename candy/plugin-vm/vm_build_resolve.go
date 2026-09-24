@@ -465,7 +465,7 @@ func resolveVmBuildIsoDistro(ctx context.Context, ex *sdk.Executor, dir string, 
 	// `source.installer:`); a CONSOLE-mode ISO VM (no `source.installer`) boots the
 	// medium's own interactive installer and is driven over its console, so the
 	// distro need not declare an answer format at all.
-	if distro.Installer == nil && vmSpec.Source.Installer != nil {
+	if distro.Installer == nil && !isoConsoleMode(vmSpec) {
 		return fmt.Errorf("distro %q declares no installer: block in the embedded build vocabulary (charly/charly.yml) — it has no unattended-install answer format, so an iso source cannot run unattended against it", vmSpec.Source.Distro)
 	}
 	distroJSON, jerr := json.Marshal(distro)

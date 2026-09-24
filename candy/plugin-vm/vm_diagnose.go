@@ -262,14 +262,14 @@ func ppmToken(r *bufio.Reader) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		switch {
-		case b == '#':
+		switch b {
+		case '#':
 			for b != '\n' {
 				if b, err = r.ReadByte(); err != nil {
 					return "", err
 				}
 			}
-		case b == ' ' || b == '\t' || b == '\n' || b == '\r':
+		case ' ', '\t', '\n', '\r':
 			if sb.Len() > 0 {
 				return sb.String(), nil
 			}

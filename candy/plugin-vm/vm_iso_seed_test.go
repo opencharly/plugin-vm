@@ -316,3 +316,16 @@ func TestInstallerSeedContext_UnparseableDiskSizeIsRejected(t *testing.T) {
 		t.Fatalf("the error must name the field; got: %v", err)
 	}
 }
+
+// isoConsoleMode is the ONE decision that separates an unattended answer-file
+// install from an interactive console-drive. A spec with NO source.installer is
+// console mode; one WITH it is unattended. Pinned because both the build engine
+// and the distro-resolve guard branch on it.
+func TestIsoConsoleMode(t *testing.T) {
+	if !isoConsoleMode(isoSpec(nil)) {
+		t.Fatal("a spec with no source.installer must be console mode")
+	}
+	if isoConsoleMode(isoSpec(&spec.VmInstaller{Username: "user", Password_hash: "$6$x$y"})) {
+		t.Fatal("a spec WITH source.installer must NOT be console mode")
+	}
+}

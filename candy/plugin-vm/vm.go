@@ -952,10 +952,10 @@ func dumpVmSerialLog(domainName string, lines int) error {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no serial log for %s at %s.\n"+
+			return fmt.Errorf("no serial log for %s at %s\n"+
 				"A domain defined before serial logging carries no <log> element and libvirt "+
 				"will never write one for it. Recreate the domain (`charly vm create`) and the "+
-				"log appears from its next boot.", domainName, path)
+				"log appears from its next boot", domainName, path)
 		}
 		return fmt.Errorf("reading the serial log for %s: %w", domainName, err)
 	}

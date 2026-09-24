@@ -156,9 +156,12 @@ func captureSession(s frameSource, cfg RecorderConfig, done <-chan struct{}) (in
 	if err != nil {
 		return 0, fmt.Errorf("recorder: open %s: %w", framesFile, err)
 	}
-	count := writeFrames(s, captureInterval(cfg.Fps), out, done)
-	if err := out.Close(); err != nil {
-		return 0, fmt.Errorf("recorder: close %s: %w", framesFile, err)
+	count, werr := writeFrames(s, captureInterval(cfg.Fps), out, done)
+	if cerr := out.Close(); cerr != nil {
+		return 0, fmt.Errorf("recorder: close %s: %w", framesFile, cerr)
+	}
+	if werr != nil {
+		return 0, fmt.Errorf("recorder: writing %s: %w", framesFile, werr)
 	}
 	if err := finalizeSession(cfg, count); err != nil {
 		return 0, err
@@ -183,15 +186,16 @@ func captureInterval(fps int) time.Duration {
 // JPEG onto w until done closes. Video semantics identical to the record loop:
 // every poll is one frame of the stream (a full DomainScreenshot per frame; a
 // poll that errors is skipped — a broken display just stops appending). Returns
-// the frame count.
-func writeFrames(s frameSource, interval time.Duration, w io.Writer, done <-chan struct{}) int {
+// the frame count, and a writer error (the output file failing mid-recording is
+// a real failure, not a skipped frame).
+func writeFrames(s frameSource, interval time.Duration, w io.Writer, done <-chan struct{}) (int, error) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	count := 0
 	for {
 		select {
 		case <-done:
-			return count
+			return count, nil
 		case <-tick.C:
 			img, err := s.Screenshot()
 			if err != nil || img == nil {
@@ -201,7 +205,9 @@ func writeFrames(s frameSource, interval time.Duration, w io.Writer, done <-chan
 			if len(b) == 0 {
 				continue
 			}
-			w.Write(b)
+			if _, werr := w.Write(b); werr != nil {
+				return count, werr
+			}
 			count++
 		}
 	}
