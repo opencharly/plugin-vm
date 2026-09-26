@@ -12,6 +12,7 @@ package vm
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -280,6 +281,42 @@ func TestPushVmBox_Live(t *testing.T) {
 	if out, err := exec.Command("podman", "pull", dstRef).CombinedOutput(); err != nil {
 		t.Fatalf("pulling the pushed ref %s back failed: %v\n%s", dstRef, err, out)
 	}
+
+	// Prove the PUSHED artifact is the containerDisk contract: an OCI manifest
+	// with a single application/vnd.oci.image.layer.v1.tar+gzip layer. The push
+	// compresses buildah's uncompressed local layer on the wire; this locks that
+	// the delivered media type is the +gzip form Cua Fleet / KubeVirt require.
+	if _, err := exec.LookPath("skopeo"); err != nil {
+		t.Skipf("skopeo not available — cannot verify the pushed media type: %v", err)
+	}
+	raw, err := exec.Command("skopeo", "inspect", "--raw", "docker://"+dstRef).Output()
+	if err != nil {
+		t.Fatalf("skopeo inspect --raw %s: %v", dstRef, err)
+	}
+	mt, err := pushedLayerMediaType(raw)
+	if err != nil {
+		t.Fatalf("reading the pushed layer media type: %v", err)
+	}
+	if mt != "application/vnd.oci.image.layer.v1.tar+gzip" {
+		t.Fatalf("pushed layer media type = %q, want application/vnd.oci.image.layer.v1.tar+gzip (the containerDisk contract)", mt)
+	}
+}
+
+// pushedLayerMediaType parses the single disk layer's media type out of a pushed
+// OCI manifest — the pure half of the live contract assertions.
+func pushedLayerMediaType(rawManifest []byte) (string, error) {
+	var m struct {
+		Layers []struct {
+			MediaType string `json:"mediaType"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal(rawManifest, &m); err != nil {
+		return "", err
+	}
+	if len(m.Layers) != 1 {
+		return "", fmt.Errorf("pushed manifest has %d layers (a containerDisk has exactly one)", len(m.Layers))
+	}
+	return m.Layers[0].MediaType, nil
 }
 
 // TestVmBuildCmd_FlagWiring drives the COMMAND, not the helpers: with the drive
