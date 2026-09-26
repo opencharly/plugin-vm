@@ -82,3 +82,61 @@ func TestVmRetag_Live(t *testing.T) {
 		t.Fatalf("the destination ref %s does not resolve after retag: %v", dst, err)
 	}
 }
+
+// buildRetagFixture builds a tiny scratch image and returns its ref + a cleanup.
+func buildRetagFixture(t *testing.T, name string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "disk.qcow2"), []byte("retag-fixture"), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	cf := "FROM scratch\nCOPY disk.qcow2 /disk/disk.img\n"
+	if err := os.WriteFile(filepath.Join(dir, "Containerfile"), []byte(cf), 0o644); err != nil {
+		t.Fatalf("writing Containerfile: %v", err)
+	}
+	ref := name + ":" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", ref).Run() })
+	if out, err := exec.Command("podman", "build", "-t", ref, "-f", filepath.Join(dir, "Containerfile"), dir).CombinedOutput(); err != nil {
+		t.Fatalf("podman build: %v\n%s", err, out)
+	}
+	return ref
+}
+
+// TestVmRetagCmd_RunLive drives the CHANGED RUNNER — `VmRetagCmd.Run()` — on the
+// real engine (not just the helper): it builds a scratch image and invokes the
+// command to retag it to a stable ref, asserting the destination resolves. With
+// CHARLY_TEST_REGISTRY set it also exercises the `--push` arm against a real
+// registry (LIVE-OR-SKIP). Skips without podman.
+func TestVmRetagCmd_RunLive(t *testing.T) {
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skipf("podman not available on this host — skipping the live VmRetagCmd.Run: %v", err)
+	}
+
+	src := buildRetagFixture(t, "localhost/vm-retag-cmd-src")
+	dst := src + "-stable"
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", dst).Run() })
+
+	cmd := &VmRetagCmd{Src: src, Dst: dst, Engine: "podman"}
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("VmRetagCmd.Run: %v", err)
+	}
+	if err := exec.Command("podman", "image", "exists", dst).Run(); err != nil {
+		t.Fatalf("VmRetagCmd.Run did not produce the destination ref %s: %v", dst, err)
+	}
+
+	reg := os.Getenv("CHARLY_TEST_REGISTRY")
+	if reg == "" {
+		t.Log("CHARLY_TEST_REGISTRY unset — skipping the --push arm (LIVE-OR-SKIP)")
+		return
+	}
+	pushed := reg + "/vm-retag-cmd-push:" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", pushed).Run() })
+	pushCmd := &VmRetagCmd{Src: src, Dst: pushed, Push: true, Engine: "podman"}
+	if err := pushCmd.Run(); err != nil {
+		t.Fatalf("VmRetagCmd.Run --push: %v", err)
+	}
+	_ = exec.Command("podman", "rmi", "-f", pushed).Run()
+	if out, err := exec.Command("podman", "pull", pushed).CombinedOutput(); err != nil {
+		t.Fatalf("pulling the pushed ref %s back failed: %v\n%s", pushed, err, out)
+	}
+}

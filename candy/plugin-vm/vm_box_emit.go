@@ -130,20 +130,20 @@ var engineCmd = func(binary string, args ...string) error {
 }
 
 // pushVmBox publishes a locally-emitted VM box to dstRef so a target cluster can
-// pull it: it retags the local image to the destination ref (a no-op when the
-// caller already passed the target ref) and pushes it with the engine. The retag
-// is local and cheap; the push is the delivery.
+// pull it: it retags the local image to the destination ref (via retagImage — the
+// ONE tag primitive; a no-op when the caller already passed the target ref) and
+// pushes it with the engine. The retag is local and cheap; the push is the
+// delivery.
 func pushVmBox(engine, srcRef, dstRef string) error {
 	if dstRef == "" {
 		return fmt.Errorf("pushVmBox: empty destination ref")
 	}
-	binary := container.EngineBinary(engine)
-	if srcRef != "" && srcRef != dstRef {
-		if err := engineCmd(binary, "tag", srcRef, dstRef); err != nil {
-			return fmt.Errorf("tagging %s as %s: %w", srcRef, dstRef, err)
+	if srcRef != "" {
+		if err := retagImage(engine, srcRef, dstRef); err != nil {
+			return err
 		}
 	}
-	if err := engineCmd(binary, "push", dstRef); err != nil {
+	if err := engineCmd(container.EngineBinary(engine), "push", dstRef); err != nil {
 		return fmt.Errorf("pushing %s: %w", dstRef, err)
 	}
 	return nil
