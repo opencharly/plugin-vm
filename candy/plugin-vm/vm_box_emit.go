@@ -9,13 +9,11 @@ package vm
 // is deploykit.EmitVmBoxAt; its read-back side (deploykit.VmCapabilitiesFromLabels)
 // is what a `charly deploy from-box vm:<ref>` consumes (cutover task 5).
 //
-// Two in-image disk layouts ship, chosen by the caller:
-//   - the DEFAULT VM-box path /disk.qcow2 (deploykit.VmBoxDiskPath) — the
-//     from-box vm: layout;
-//   - the KubeVirt containerDisk contract /disk/disk.img
-//     (deploykit.ContainerDiskPath), the layout a KubeVirt cluster boots
-//     directly (VMI `containerDisk:`), selected by `charly vm build
-//     --container-disk` (plan WS-6.3, the charly-box → containerDisk payload).
+// The disk lands at the KubeVirt containerDisk contract
+// (deploykit.ContainerDiskPath, /disk/disk.img) — the /disk directory KubeVirt
+// scans AND the path plugin-vm's own container_disk reader expects. A charly VM
+// box IS a containerDisk artifact, so there is ONE in-image layout (plan WS-6.3,
+// the charly-box → containerDisk payload).
 //
 // `charly vm build --push <ref>` additionally publishes the emitted box to a
 // registry-pullable ref (the delivery half of WS-6.3); the emit itself stays
@@ -80,41 +78,27 @@ func buildVmBoxMetadata(vmName string, vmSpec *VmSpec) *spec.VmBoxMetadata {
 
 // emitVmBox wraps a materialized disk + the entity's metadata into a VM box
 // image in local engine storage and tags it
-// `localhost/charly-<vmName>:<calver>` — the local-storage convention the
-// bootc images already use. It returns the box ref so the caller can print it.
+// `localhost/charly-<vmName>:<calver>` — the local-storage convention the bootc
+// images already use. It returns the box ref so the caller can print it.
 //
-// inImagePath selects where the disk lands INSIDE the image: the empty string
-// uses the default VM-box path (deploykit.VmBoxDiskPath, /disk.qcow2);
-// deploykit.ContainerDiskPath (/disk/disk.img) emits the KubeVirt containerDisk
-// layout a cluster boots directly. The path is validated by EmitVmBoxAt.
+// The disk lands at `deploykit.ContainerDiskPath` (/disk/disk.img) — the KubeVirt
+// containerDisk contract (the /disk directory KubeVirt scans) AND the path
+// plugin-vm's own container_disk reader expects. A charly VM box IS a
+// containerDisk artifact; there is no other in-image layout.
 //
 // The engine string is the drive's resolved engine (reply.Engine — "podman" on
 // this host). The error is returned unwrapped so the caller decides how to
 // surface it (the drive warns and keeps the disk build's success).
-func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath string) (string, error) {
+func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath string) (string, error) {
 	if vmSpec == nil {
 		return "", fmt.Errorf("emitVmBox: nil vm spec")
 	}
 	meta := buildVmBoxMetadata(vmName, vmSpec)
 	ref := fmt.Sprintf("localhost/charly-%s:%s", vmName, meta.Version)
-	path := inImagePath
-	if path == "" {
-		path = deploykit.VmBoxDiskPath
-	}
-	if err := deploykit.EmitVmBoxAt(engine, ref, meta, diskPath, path); err != nil {
+	if err := deploykit.EmitVmBoxAt(engine, ref, meta, diskPath, deploykit.ContainerDiskPath); err != nil {
 		return "", fmt.Errorf("emitting VM box %s: %w", ref, err)
 	}
 	return ref, nil
-}
-
-// boxInImagePath maps the `--container-disk` choice onto the in-image path the
-// emitter writes: the KubeVirt containerDisk contract when set, the default
-// VM-box layout (empty → the emitter's /disk.qcow2) otherwise. Pure.
-func boxInImagePath(containerDisk bool) string {
-	if containerDisk {
-		return deploykit.ContainerDiskPath
-	}
-	return ""
 }
 
 // engineCmd runs one container-engine subcommand for the box-delivery path. A

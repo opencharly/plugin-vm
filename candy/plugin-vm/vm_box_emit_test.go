@@ -157,7 +157,7 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	vmName := "vm-box-emit-test"
 	want := buildVmBoxMetadata(vmName, s)
 
-	ref, err := emitVmBox("podman", vmName, s, diskPath, "")
+	ref, err := emitVmBox("podman", vmName, s, diskPath)
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -177,18 +177,6 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("VM box metadata did not round-trip through the emitted image:\n in: %+v\nout: %+v", want, got)
-	}
-}
-
-// TestBoxInImagePath pins the --container-disk → in-image path mapping: set emits
-// the KubeVirt containerDisk contract (/disk/disk.img); unset keeps the emitter's
-// default VM-box layout (empty path → /disk.qcow2).
-func TestBoxInImagePath(t *testing.T) {
-	if got := boxInImagePath(true); got != deploykit.ContainerDiskPath {
-		t.Errorf("boxInImagePath(true) = %q, want the containerDisk contract %q", got, deploykit.ContainerDiskPath)
-	}
-	if got := boxInImagePath(false); got != "" {
-		t.Errorf("boxInImagePath(false) = %q, want the default (\"\")", got)
 	}
 }
 
@@ -261,7 +249,7 @@ func TestPushVmBox_Live(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox("podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox("podman", "vm-box-push-test", s, diskPath)
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -298,24 +286,24 @@ func TestVmBuildCmd_FlagWiring(t *testing.T) {
 		return nil
 	}
 
-	cmd := &VmBuildCmd{Box: "myvm", Type: "qcow2", ContainerDisk: true, Push: "reg.example/box:1"}
+	cmd := &VmBuildCmd{Box: "myvm", Type: "qcow2", Push: "reg.example/box:1"}
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("VmBuildCmd.Run: %v", err)
 	}
-	if !gotOpts.ContainerDisk || gotOpts.Push != "reg.example/box:1" {
-		t.Errorf("flag wiring: Run passed opts %+v, want {ContainerDisk:true Push:reg.example/box:1}", gotOpts)
+	if gotOpts.Push != "reg.example/box:1" {
+		t.Errorf("flag wiring: Run passed opts %+v, want Push=reg.example/box:1", gotOpts)
 	}
 	if gotReq.Box != "myvm" {
 		t.Errorf("request Box = %q, want myvm", gotReq.Box)
 	}
 
 	// Defaults: unset flags → the zero-value opts.
-	gotOpts = vmBoxEmitOpts{ContainerDisk: true, Push: "stale"}
+	gotOpts = vmBoxEmitOpts{Push: "stale"}
 	cmd = &VmBuildCmd{Box: "myvm", Type: "qcow2"}
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("VmBuildCmd.Run (defaults): %v", err)
 	}
-	if gotOpts.ContainerDisk || gotOpts.Push != "" {
+	if gotOpts.Push != "" {
 		t.Errorf("default flag wiring: opts = %+v, want the zero value", gotOpts)
 	}
 }
@@ -337,7 +325,7 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox("podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox("podman", "vm-box-cd-layout", s, diskPath)
 	if err != nil {
 		t.Fatalf("emitVmBox(containerDisk): %v", err)
 	}

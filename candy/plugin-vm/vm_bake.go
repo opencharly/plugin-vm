@@ -114,7 +114,7 @@ func (c *VmBakeCmd) Run() error {
 
 	// Phase 5 — wrap the frozen disk into the box image.
 	fmt.Fprintf(os.Stderr, "bake %q: phase 5 — emitting the VM box\n", c.Box)
-	ref, err := emitVmBox(engine, c.Box, vmSpec, entry.DiskPath, "")
+	ref, err := emitVmBox(engine, c.Box, vmSpec, entry.DiskPath)
 	if err != nil {
 		return fmt.Errorf("vm bake: emitting box: %w", err)
 	}

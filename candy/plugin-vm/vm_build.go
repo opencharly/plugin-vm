@@ -23,17 +23,16 @@ import (
 // privileged-container / qemu-img / bootc-install / cloud-init exec itself and prints its own
 // progress to the shared stdio (compiled-in, so os.Stderr is the operator's terminal).
 type VmBuildCmd struct {
-	Box           string `arg:"" help:"Bootc image name"`
-	Size          string `name:"size" help:"Override disk size (e.g. 20G, '20 GiB')"`
-	RootSize      string `name:"root-size" help:"Override root partition size (e.g. 10G)"`
-	Tag           string `name:"tag" help:"Image tag override"`
-	Type          string `name:"type" default:"qcow2" help:"Output format: qcow2, raw"`
-	Transport     string `name:"transport" help:"Image transport: registry, containers-storage, oci, oci-archive"`
-	Console       bool   `name:"console" help:"Enable console output for debugging"`
-	Force         bool   `name:"force" help:"Rebuild the disk base even when content-fresh (default: skip if the base already matches the source). SINGLE-BED ONLY — do NOT force-rebuild a base that live per-domain overlays back onto (it mutates a read-only backing file); the concurrent-bed R10 uses idempotent-skip, never --force."`
-	FromSnapshot  string `name:"from-snapshot" help:"Build the entity's disk as a CLONE of its own golden at this snapshot (the unified from: name:tag functional half — the deploy's from_snapshot flows here)."`
-	ContainerDisk bool   `name:"container-disk" help:"Emit the VM box with the disk at /disk/disk.img (the KubeVirt containerDisk contract a cluster boots directly) instead of the default /disk.qcow2."`
-	Push          string `name:"push" help:"After emitting, retag and push the VM box image to this registry-pullable ref (the WS-6.3 delivery half). An explicit push makes the emit and the push load-bearing."`
+	Box          string `arg:"" help:"Bootc image name"`
+	Size         string `name:"size" help:"Override disk size (e.g. 20G, '20 GiB')"`
+	RootSize     string `name:"root-size" help:"Override root partition size (e.g. 10G)"`
+	Tag          string `name:"tag" help:"Image tag override"`
+	Type         string `name:"type" default:"qcow2" help:"Output format: qcow2, raw"`
+	Transport    string `name:"transport" help:"Image transport: registry, containers-storage, oci, oci-archive"`
+	Console      bool   `name:"console" help:"Enable console output for debugging"`
+	Force        bool   `name:"force" help:"Rebuild the disk base even when content-fresh (default: skip if the base already matches the source). SINGLE-BED ONLY — do NOT force-rebuild a base that live per-domain overlays back onto (it mutates a read-only backing file); the concurrent-bed R10 uses idempotent-skip, never --force."`
+	FromSnapshot string `name:"from-snapshot" help:"Build the entity's disk as a CLONE of its own golden at this snapshot (the unified from: name:tag functional half — the deploy's from_snapshot flows here)."`
+	Push         string `name:"push" help:"After emitting, retag and push the VM box image to this registry-pullable ref (the WS-6.3 delivery half). An explicit push makes the emit and the push load-bearing."`
 }
 
 func (c *VmBuildCmd) Run() error {
@@ -59,16 +58,15 @@ var vmBuildDrive = runVmBuildDrive
 // emitOpts maps the command's box-emission flags onto the drive's options.
 // Pure, so the flag wiring is unit-testable.
 func (c *VmBuildCmd) emitOpts() vmBoxEmitOpts {
-	return vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push}
+	return vmBoxEmitOpts{Push: c.Push}
 }
 
-// vmBoxEmitOpts carries the box-emission choices that are NOT part of the
-// spec.VmBuildRequest wire (they select the emitted box layout + delivery, a
-// plugin-local concern): ContainerDisk emits the KubeVirt /disk/disk.img layout,
-// Push publishes the emitted box to a registry-pullable ref.
+// vmBoxEmitOpts carries the box-DELIVERY choice that is NOT part of the
+// spec.VmBuildRequest wire (a plugin-local concern): Push publishes the emitted
+// box to a registry-pullable ref. The in-image layout is fixed (the KubeVirt
+// containerDisk contract), so it is not an option.
 type vmBoxEmitOpts struct {
-	ContainerDisk bool
-	Push          string
+	Push string
 }
 
 // runVmBuildDrive runs the standard `charly vm build` pipeline for one entity:
@@ -204,7 +202,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) er
 	// emit and the push load-bearing: the operator asked for a deliverable image,
 	// so a failure is returned rather than silently skipped.
 	vmName, _ := parseImageArg(box)
-	ref, emitErr := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk, boxInImagePath(emit.ContainerDisk))
+	ref, emitErr := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk)
 	if emit.Push != "" {
 		if emitErr != nil {
 			return fmt.Errorf("box emission for --push: %w", emitErr)
