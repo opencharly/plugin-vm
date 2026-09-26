@@ -135,6 +135,17 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		fmt.Fprintf(os.Stderr, "Wrote %s (answers: %s)\n", res.SeedIsoPath, strings.Join(res.SeedFiles, ", "))
 		builtDisk = res.DiskPath
 
+	case "container_disk":
+		res, err := BuildContainerDisk(&vmSpec, reply.OutputDir, reply.VmStateDir, reply.ExistingState, reply.Force)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Pulled %s (sha256=%s)\n", vmSpec.Source.Image, res.BaseImageSHA256)
+		fmt.Fprintf(os.Stderr, "Wrote %s\n", res.DiskPath)
+		fmt.Fprintf(os.Stderr, "Wrote %s\n", res.SeedIsoPath)
+		fmt.Fprintf(os.Stderr, "Instance-id: %s\n", res.InstanceID)
+		builtDisk = res.DiskPath
+
 	case "clone":
 		// The unified from: name:tag drive: build the entity as a CLONE of ITSELF at
 		// the deploy's snapshot (req.FromSnapshot — resolveVmBuild set reply.SourceKind

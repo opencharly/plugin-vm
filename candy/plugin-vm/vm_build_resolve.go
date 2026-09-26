@@ -38,7 +38,7 @@ import (
 // unsupported-kind error message so adding a new kind keeps the enumeration in sync with the switch.
 // clone is NOT a source kind — it is the DEPLOY-DRIVEN drive (from: name:tag → from_snapshot);
 // the retired entity arm (source.kind: clone) errors loudly in the switch below.
-var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso"}
+var knownVmSourceKinds = []string{"cloud_image", "bootc", "bootstrap", "iso", "container_disk"}
 
 // vmBuildDriveSourceKind returns the reply SourceKind for a build request: "clone" (the
 // DRIVE, not an entity kind) when the request carries from_snapshot — the unified
@@ -416,6 +416,16 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		// fetched from a URL, so no host-only lookup is involved.
 		if err := resolveVmBuildIsoDistro(ctx, ex, dir, vmSpec, &reply); err != nil {
 			return spec.VmBuildReply{}, err
+		}
+
+	case "container_disk":
+		// The OCI pull is done in the BUILD step (BuildContainerDisk fetches its own
+		// artifact via skopeo + the content-addressed cache). Nothing host-only to
+		// resolve here, exactly like cloud_image — the arm is cloud_image-like: a
+		// prebuilt guest disk seeded through cloud-init, so the distro (required by
+		// the vm kind's OpValidate) selects the same guest dispatches.
+		if vmSpec.Source.Image == "" {
+			return spec.VmBuildReply{}, fmt.Errorf("source.image is required for container_disk VMs")
 		}
 
 	case "clone":
