@@ -75,6 +75,43 @@ func entityLeaf(name string) string {
 	return name
 }
 
+// vmBuildDiskDirName is the directory name `vm build` keys its disk/seed output
+// under. It MUST be the LEAF entity (entityLeaf(boxName)): every READ path
+// (baseDiskPath, BuildClone, vm_diagnose) uses vmDiskDir(entityLeaf(entity)), so
+// keying the WRITE by the qualified name would build `image/<ns.bed>/` and then
+// fail `vm create` with `disk.qcow2 not found at image/<leaf>/disk.qcow2` (RCA-F).
+// Extracted as a named helper so the write/read symmetry is unit-testable
+// directly (not inferred from the expression).
+func vmBuildDiskDirName(boxName string) string {
+	return entityLeaf(boxName)
+}
+
+// vmBuildOutputDir is the output disk directory `vm build` writes to: the VM disk
+// dir keyed by the LEAF entity (vmBuildDiskDirName), the SAME key every READ path
+// (baseDiskPath/BuildClone/vm_diagnose) uses. This is the ONE expression the
+// resolveVmBuild call site emits, kept whole so the write/read symmetry is
+// unit-testable directly (TestVmBuildOutputDir_LeafSymmetry) rather than inferred
+// from the call site.
+func vmBuildOutputDir(boxName string) (string, error) {
+	return vmshared.VmDiskDir(vmBuildDiskDirName(boxName))
+}
+
+// vmBuildEntityBody resolves boxName's kind:vm template body from uf — the
+// canonical namespace-aware lookup (loaderkit ResolveKindEntityBody, the runtime
+// counterpart of ResolveEntityRef): a local OR namespace-qualified (ns.entity, a
+// git-linked import ref) vm template resolves here. A nil uf is a miss.
+//
+// The guard is `uf == nil`, NOT the retired `uf.VM() == nil`: uf.VM() is the
+// LOCAL-ONLY top-level body map, so for a namespace-qualified ref (the body lives
+// in uf.Namespaces, folded by ProjectTemplates) uf.VM() is nil and the old guard
+// returned noVmEntityErr before the namespace-aware lookup could run (RCA-F).
+func vmBuildEntityBody(uf *spec.UnifiedFile, boxName string) (json.RawMessage, bool) {
+	if uf == nil {
+		return nil, false
+	}
+	return loaderkit.ResolveKindEntityBody(uf, "vm", boxName)
+}
+
 // resolveVmBuildViaDeployFrom hops a from: name:tag DRIVE target through the deploy map:
 // boxName names a DEPLOY (the base bed) whose from: names the base kind:vm entity — resolve
 // that entity. Used ONLY when the drive carries from_snapshot (the clone drive); the plain
@@ -143,14 +180,10 @@ func loadVmProjectUnified(ctx context.Context, ex *sdk.Executor, dir string) (*s
 // reach it directly; command:vm no longer needs to round-trip through core for this).
 func resolveVmBuildEntity(ctx context.Context, ex *sdk.Executor, dir, boxName string) (*VmSpec, error) {
 	uf, ok, err := loadVmProjectUnified(ctx, ex, dir)
-	if err != nil || !ok || uf.VM() == nil {
+	if err != nil || !ok {
 		return nil, noVmEntityErr(boxName)
 	}
-	// The canonical namespace-aware body lookup (loaderkit ResolveKindEntityBody
-	// — the runtime counterpart of ResolveEntityRef): a local OR
-	// namespace-qualified (ns.entity, a git-linked import ref) vm template
-	// resolves here. The former local-only uf.VM() lookup is retired.
-	body, hit := loaderkit.ResolveKindEntityBody(uf, "vm", boxName)
+	body, hit := vmBuildEntityBody(uf, boxName)
 	if !hit {
 		return nil, noVmEntityErr(boxName)
 	}
@@ -340,7 +373,7 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		engine = kit.EngineBinary(rt.RunEngine)
 	}
 
-	diskDir, err := vmshared.VmDiskDir(boxName)
+	diskDir, err := vmBuildOutputDir(boxName)
 	if err != nil {
 		return spec.VmBuildReply{}, err
 	}
