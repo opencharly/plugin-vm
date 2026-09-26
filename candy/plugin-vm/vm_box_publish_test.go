@@ -1,115 +1,108 @@
 package vm
 
 // vm_box_publish_test.go — the pure contract of `charly vm box publish`: the
-// container-disk-emit envelope it hands verb:oci (the +gzip/`/disk/disk.img`
-// contract + the spec.VmBoxMetadata labels) and the result guard. Both halves
-// are extracted from the reverse-channel call so they are testable with no host
-// executor. The end-to-end produce path is exercised live by the
-// check-cua-fleet-build-vm bed.
+// skopeo push argv (OCI manifest + gzip destination layers), the local box ref,
+// and the pushed-manifest +gzip guard. The emit half is the SDK emitter
+// (deploykit.EmitVmBoxAt) and is covered by vm_box_emit_test.go; the end-to-end
+// produce path is exercised live by the check-cua-fleet-build-vm bed.
 
 import (
-	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
-
-	"github.com/opencharly/sdk/deploykit"
-	"github.com/opencharly/spec/spec"
 )
 
-// TestContainerDiskEmitEnvelope pins the wire envelope: the disk and ref ride
-// through, the in-image path defaults to the KubeVirt/Cua contract, the
-// oci_op selector is container-disk-emit, and the metadata labels carry the
-// SAME spec.VmBoxMetadata JSON the local VM box does.
-func TestContainerDiskEmitEnvelope(t *testing.T) {
-	s := emitFixtureSpec()
-	params, env, err := containerDiskEmitEnvelope("clone-vm", s, "/var/lib/charly/disk.qcow2", "reg.example.com/cua:1", "", "", false)
+// TestContainerDiskLocalRef pins that the containerDisk local box ref is
+// distinct from the from-box VM-box ref (whose disk lives at /disk.qcow2), so
+// the two artifacts cannot collide in local storage.
+func TestContainerDiskLocalRef(t *testing.T) {
+	got := containerDiskLocalRef("omarchy-cua", "2026.269.1234")
+	want := "localhost/charly-omarchy-cua-containerdisk:2026.269.1234"
+	if got != want {
+		t.Fatalf("containerDiskLocalRef = %q, want %q", got, want)
+	}
+	if got == "localhost/charly-omarchy-cua:2026.269.1234" {
+		t.Fatal("containerDisk ref must not equal the from-box VM-box ref")
+	}
+}
+
+// TestSkopeoCopyArgs pins the push argv: the OCI manifest type and the
+// gzip-compressed destination layers are the +gzip containerDisk contract;
+// --dest-tls-verify=false is added only for an insecure registry.
+func TestSkopeoCopyArgs(t *testing.T) {
+	got := skopeoCopyArgs("localhost/charly-x-containerdisk:1", "reg.example.com/cua:1", false)
+	want := []string{"copy", "--format", "oci", "--dest-compress", "--dest-compress-format", "gzip", "containers-storage:localhost/charly-x-containerdisk:1", "docker://reg.example.com/cua:1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("skopeoCopyArgs =\n  %v\nwant\n  %v", got, want)
+	}
+	ins := skopeoCopyArgs("local:x", "reg/y:1", true)
+	if !contains(ins, "--dest-tls-verify=false") {
+		t.Fatalf("insecure copy args missing --dest-tls-verify=false: %v", ins)
+	}
+	if !contains(ins, "--dest-compress-format") {
+		t.Fatalf("copy args must always request gzip layers: %v", ins)
+	}
+}
+
+// TestSkopeoInspectArgs pins the two inspect argv shapes used to verify the
+// push (raw manifest + digest), with the insecure flag threaded.
+func TestSkopeoInspectArgs(t *testing.T) {
+	raw := skopeoInspectRawArgs("reg/x:1", false)
+	if !reflect.DeepEqual(raw, []string{"inspect", "--raw", "docker://reg/x:1"}) {
+		t.Fatalf("skopeoInspectRawArgs = %v", raw)
+	}
+	if !contains(skopeoInspectRawArgs("reg/x:1", true), "--tls-verify=false") {
+		t.Fatal("insecure raw inspect must pass --tls-verify=false")
+	}
+	dg := skopeoInspectDigestArgs("reg/x:1", false)
+	if !reflect.DeepEqual(dg, []string{"inspect", "--format", "{{.Digest}}", "docker://reg/x:1"}) {
+		t.Fatalf("skopeoInspectDigestArgs = %v", dg)
+	}
+}
+
+// TestContainerDiskMediaType is the pushed-manifest guard: a single +gzip layer
+// passes; an uncompressed layer, a multi-layer manifest, and an index all fail.
+func TestContainerDiskMediaType(t *testing.T) {
+	gzipManifest := []byte(`{"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[{"mediaType":"` + containerDiskGzipLayer + `","digest":"sha256:aa","size":10}]}`)
+	mt, err := containerDiskMediaType(gzipManifest)
 	if err != nil {
-		t.Fatalf("containerDiskEmitEnvelope: %v", err)
+		t.Fatalf("a single +gzip layer must parse: %v", err)
+	}
+	if mt != containerDiskGzipLayer {
+		t.Fatalf("media type = %q, want %q", mt, containerDiskGzipLayer)
 	}
 
-	var envMap map[string]string
-	if err := json.Unmarshal(env, &envMap); err != nil {
-		t.Fatalf("decode env: %v", err)
-	}
-	if envMap["oci_op"] != "container-disk-emit" {
-		t.Fatalf("oci_op = %q, want container-disk-emit", envMap["oci_op"])
+	uncompressed := []byte(`{"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar"}]}`)
+	if mt, err := containerDiskMediaType(uncompressed); err != nil || mt != "application/vnd.oci.image.layer.v1.tar" {
+		t.Fatalf("uncompressed layer should parse to its own media type (the caller compares): %q %v", mt, err)
 	}
 
-	var req containerDiskEmitRequest
-	if err := json.Unmarshal(params, &req); err != nil {
-		t.Fatalf("decode params: %v", err)
+	multi := []byte(`{"layers":[{"mediaType":"a"},{"mediaType":"b"}]}`)
+	if _, err := containerDiskMediaType(multi); err == nil {
+		t.Error("a multi-layer manifest must fail (not a containerDisk)")
 	}
-	if req.DiskPath != "/var/lib/charly/disk.qcow2" {
-		t.Errorf("disk_path = %q, want the disk argument", req.DiskPath)
+	index := []byte(`{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}`)
+	if _, err := containerDiskMediaType(index); err == nil {
+		t.Error("an index (no layers) must fail")
 	}
-	if req.Ref != "reg.example.com/cua:1" {
-		t.Errorf("ref = %q, want the registry ref", req.Ref)
-	}
-	if req.InImagePath != deploykit.ContainerDiskPath {
-		t.Errorf("in_image_path = %q, want the default %q", req.InImagePath, deploykit.ContainerDiskPath)
-	}
-	if deploykit.ContainerDiskPath != "/disk/disk.img" {
-		t.Fatalf("deploykit.ContainerDiskPath = %q, want the containerDisk contract /disk/disk.img", deploykit.ContainerDiskPath)
-	}
-
-	// The label must be the metadata contract, readable back field-for-field.
-	raw := req.Labels[spec.LabelVmBox]
-	if raw == "" {
-		t.Fatalf("labels carry no %s (got %v)", spec.LabelVmBox, req.Labels)
-	}
-	var meta spec.VmBoxMetadata
-	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
-		t.Fatalf("decode %s: %v", spec.LabelVmBox, err)
-	}
-	if meta.Source.Kind != "clone" || meta.Source.FromVm != "base-vm" {
-		t.Errorf("metadata provenance = %+v, want the resolved clone source", meta.Source)
-	}
-	if meta.Distro != "fedora" {
-		t.Errorf("metadata distro = %q, want fedora", meta.Distro)
+	if _, err := containerDiskMediaType([]byte("not json")); err == nil {
+		t.Error("invalid JSON must fail")
 	}
 }
 
-// TestContainerDiskEmitExplicitInImagePath pins that an explicit in-image path
-// overrides the default (the non-default KubeVirt VMI path case).
-func TestContainerDiskEmitExplicitInImagePath(t *testing.T) {
-	params, _, err := containerDiskEmitEnvelope("vm", emitFixtureSpec(), "/d.img", "reg/x:1", "/custom/disk.qcow2", "/tmp/layout", true)
-	if err != nil {
-		t.Fatal(err)
+func contains(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
 	}
-	var req containerDiskEmitRequest
-	if err := json.Unmarshal(params, &req); err != nil {
-		t.Fatal(err)
-	}
-	if req.InImagePath != "/custom/disk.qcow2" {
-		t.Errorf("in_image_path = %q, want the explicit path", req.InImagePath)
-	}
-	if req.LayoutDir != "/tmp/layout" || !req.Insecure {
-		t.Errorf("layout_dir/insecure not threaded: %+v", req)
-	}
+	return false
 }
 
-// TestValidateContainerDiskReply is the failure-mode guard: a missing digest or
-// a non-+gzip layer must be a real error, never a green publish.
-func TestValidateContainerDiskReply(t *testing.T) {
-	const gzip = "application/vnd.oci.image.layer.v1.tar+gzip"
-	if err := validateContainerDiskReply(containerDiskEmitReply{Digest: "sha256:abc", MediaType: gzip}); err != nil {
-		t.Fatalf("a +gzip reply with a digest must pass: %v", err)
-	}
-	if err := validateContainerDiskReply(containerDiskEmitReply{MediaType: gzip}); err == nil {
-		t.Error("a reply with no digest must fail")
-	}
-	if err := validateContainerDiskReply(containerDiskEmitReply{Digest: "sha256:abc", MediaType: "application/vnd.oci.image.layer.v1.tar"}); err == nil {
-		t.Error("an uncompressed-tar reply must fail (the +gzip contract)")
-	}
-}
-
-// TestPublishContainerDiskNoReverseChannel proves the command fails loudly when
-// it has no host reverse channel (an out-of-process placement), rather than
-// pretending the artifact was published.
-func TestPublishContainerDiskNoReverseChannel(t *testing.T) {
-	saved := cmdExec
-	cmdExec = nil
-	defer func() { cmdExec = saved }()
-	if _, err := publishContainerDisk("vm", emitFixtureSpec(), "/d.img", "reg/x:1", "", "", false); err == nil {
-		t.Fatal("publishContainerDisk with no reverse channel must error")
+// TestContainerDiskGzipLayerConstant pins the contract constant against the
+// literal Cua Fleet requires, so a rename cannot silently change the media type.
+func TestContainerDiskGzipLayerConstant(t *testing.T) {
+	if !strings.HasSuffix(containerDiskGzipLayer, "+gzip") {
+		t.Fatalf("containerDiskGzipLayer = %q, want a +gzip media type", containerDiskGzipLayer)
 	}
 }

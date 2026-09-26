@@ -128,7 +128,7 @@ func (c *VmBakeCmd) Run() error {
 	// the operator asked for the artifact.
 	if c.PublishTo != "" {
 		fmt.Fprintf(os.Stderr, "bake %q: phase 5b — publishing the containerDisk\n", c.Box)
-		reply, perr := publishContainerDisk(c.Box, vmSpec, entry.DiskPath, c.PublishTo, "", "", c.PublishInsecure)
+		reply, perr := publishContainerDisk(engine, c.Box, vmSpec, entry.DiskPath, c.PublishTo, "", c.PublishInsecure)
 		if perr != nil {
 			return fmt.Errorf("vm bake: publishing containerDisk: %w", perr)
 		}

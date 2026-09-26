@@ -4,28 +4,42 @@ package vm
 // or a captured snapshot's disk) into a bootable containerDisk OCI image and
 // push it to a registry.
 //
-// The emitter is verb:oci's container-disk-emit (candy/plugin-oci, where the
-// go-containerregistry stack is single-homed): it streams the disk into a single
-// application/vnd.oci.image.layer.v1.tar+gzip layer at the KubeVirt/Cua in-image
-// path (deploykit.ContainerDiskPath = /disk/disk.img) and remote.Write's it. The
-// in-image path contract and the VM-box metadata labels are the SDK's
-// (deploykit.ContainerDiskPath + buildVmBoxMetadata), so this command adds no
-// second source for either.
+// Two steps, both reusing machinery plugin-vm already owns:
+//
+//  1. EMIT a local VM-box image whose single layer carries the disk at the
+//     KubeVirt/Cua in-image path (deploykit.ContainerDiskPath = /disk/disk.img),
+//     via the SDK emitter (buildah) — the same emitter `charly vm build`/`bake`
+//     use for the from-box artifact.
+//  2. PUSH it with `skopeo copy --format oci --dest-compress
+//     containers-storage:<localRef> docker://<registry>` — the SAME skopeo
+//     dependency the container_disk PULL (vm_container_disk.go) uses, in the
+//     opposite direction. `--dest-compress` sets the layer media type to
+//     application/vnd.oci.image.layer.v1.tar+gzip, the containerDisk contract
+//     Cua Fleet / KubeVirt require; buildah's own layer is the uncompressed
+//     application/vnd.oci.image.layer.v1.tar.
+//
+// The pushed manifest is re-read (`skopeo inspect --raw`) and its layer media
+// type asserted to be +gzip, so a regression to an uncompressed layer fails the
+// command instead of printing a green ref.
 //
 // This is the produce half of the containerDisk support the `container_disk`
-// #VmSource arm consumes; it is reached over the F10 peer-dispatch leg
-// (InvokeProvider "verb"/"oci") exactly as plugin-box reaches verb:oci for its
-// merge and plugin-cache reaches it for its transport.
+// #VmSource arm consumes; the in-image path and the metadata contract are the
+// SDK's single homes (deploykit.ContainerDiskPath + buildVmBoxMetadata).
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
-	"github.com/opencharly/sdk"
 	"github.com/opencharly/sdk/deploykit"
-	"github.com/opencharly/spec/spec"
+	"github.com/opencharly/sdk/kit"
 )
+
+// containerDiskGzipLayer is the layer media type a containerDisk must carry —
+// Cua Fleet's contract (S1/S2), and what `skopeo copy --dest-compress` produces.
+const containerDiskGzipLayer = "application/vnd.oci.image.layer.v1.tar+gzip"
 
 // VmBoxCmd groups the VM-box artifact commands.
 type VmBoxCmd struct {
@@ -38,31 +52,7 @@ type VmBoxPublishCmd struct {
 	To           string `name:"to" required:"" help:"Registry reference to push (host/repo:tag)"`
 	FromSnapshot string `name:"from-snapshot" help:"Publish the disk captured by this snapshot (default: the VM's current disk)"`
 	InImagePath  string `name:"in-image-path" help:"In-layer disk path (default the KubeVirt/Cua containerDisk contract, /disk/disk.img)"`
-	LayoutDir    string `name:"layout-dir" help:"Also write the image as a local OCI Image Layout at this directory (consumable as oci:<dir>)"`
 	Insecure     bool   `name:"insecure" help:"Allow a plain-HTTP (localhost dev) registry"`
-}
-
-// containerDiskEmitRequest mirrors candy/plugin-oci's container-disk-emit wire
-// envelope. It is a JSON contract, decoded by the plugin-oci leg; the emit
-// request type is not in spec yet (spec main carries the C7 checkstep change the
-// released sdk cannot compile against), so the caller mirrors the envelope the
-// same way pre-#149 cache callers did.
-type containerDiskEmitRequest struct {
-	DiskPath    string            `json:"disk_path"`
-	InImagePath string            `json:"in_image_path,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Ref         string            `json:"ref"`
-	Insecure    bool              `json:"insecure,omitempty"`
-	LayoutDir   string            `json:"layout_dir,omitempty"`
-}
-
-// containerDiskEmitReply is the emit result the plugin-oci leg returns.
-type containerDiskEmitReply struct {
-	Ref       string `json:"ref"`
-	Digest    string `json:"digest"`
-	MediaType string `json:"media_type"`
-	LayerSize int64  `json:"layer_size"`
-	LayoutDir string `json:"layout_dir,omitempty"`
 }
 
 // Run executes charly vm box publish.
@@ -82,17 +72,20 @@ func (c *VmBoxPublishCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	reply, err := publishContainerDisk(c.Box, vmSpec, disk, c.To, c.InImagePath, c.LayoutDir, c.Insecure)
+	// The engine is resolved the SAME way the build drive resolves it (the
+	// buildah-backed engine binary deploykit.EmitVmBox runs).
+	engine := "podman"
+	if rt, rerr := kit.ResolveRuntime(); rerr == nil {
+		engine = kit.EngineBinary(rt.RunEngine)
+	}
+	reply, err := publishContainerDisk(engine, c.Box, vmSpec, disk, c.To, c.InImagePath, c.Insecure)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("published containerDisk %s@%s\n", reply.Ref, reply.Digest)
 	fmt.Printf("  disk:       %s\n", disk)
 	fmt.Printf("  media type: %s\n", reply.MediaType)
-	fmt.Printf("  layer:      %d bytes\n", reply.LayerSize)
-	if reply.LayoutDir != "" {
-		fmt.Printf("  layout:     %s\n", reply.LayoutDir)
-	}
+	fmt.Printf("  local box:  %s\n", reply.LocalRef)
 	return nil
 }
 
@@ -124,83 +117,97 @@ func resolvePublishDisk(box, fromSnapshot string) (string, error) {
 	return disk, nil
 }
 
-// publishContainerDisk builds the containerDisk metadata labels and reaches
-// verb:oci's container-disk-emit over the reverse channel. The labels carry the
-// SAME spec.VmBoxMetadata contract the local VM box does, so a consumer can read
-// either artifact through deploykit.VmCapabilitiesFromLabels.
-func publishContainerDisk(vmName string, vmSpec *VmSpec, diskPath, ref, inImagePath, layoutDir string, insecure bool) (containerDiskEmitReply, error) {
-	if cmdExec == nil {
-		return containerDiskEmitReply{}, fmt.Errorf("vm box publish: no host reverse channel (command not compiled-in?)")
-	}
-	params, envJSON, err := containerDiskEmitEnvelope(vmName, vmSpec, diskPath, ref, inImagePath, layoutDir, insecure)
-	if err != nil {
-		return containerDiskEmitReply{}, err
-	}
-	out, err := cmdExec.InvokeProvider(cmdCtx, "verb", "oci", sdk.OpRun, params, envJSON, sdk.InvokeProviderOpts{})
-	if err != nil {
-		return containerDiskEmitReply{}, fmt.Errorf("vm box publish: %w", err)
-	}
-	var reply containerDiskEmitReply
-	if len(out) > 0 {
-		if uerr := json.Unmarshal(out, &reply); uerr != nil {
-			return containerDiskEmitReply{}, fmt.Errorf("vm box publish: decode reply: %w", uerr)
-		}
-	}
-	if err := validateContainerDiskReply(reply); err != nil {
-		return containerDiskEmitReply{}, err
-	}
-	return reply, nil
+// publishResult is the publish outcome the command prints.
+type publishResult struct {
+	Ref       string
+	Digest    string
+	MediaType string
+	LocalRef  string
 }
 
-// containerDiskEmitEnvelope is the PURE half of publishContainerDisk: it builds
-// the container-disk-emit params (with the metadata labels and the defaulted
-// in-image path) and the oci_op env selector, so the wire contract is
-// unit-testable with no reverse channel.
-func containerDiskEmitEnvelope(vmName string, vmSpec *VmSpec, diskPath, ref, inImagePath, layoutDir string, insecure bool) ([]byte, []byte, error) {
+// publishContainerDisk emits the local containerDisk box (disk at inImagePath,
+// metadata labels) and pushes it to ref with skopeo, then verifies the pushed
+// layer is the +gzip form.
+func publishContainerDisk(engine, vmName string, vmSpec *VmSpec, diskPath, ref, inImagePath string, insecure bool) (publishResult, error) {
 	if inImagePath == "" {
 		inImagePath = deploykit.ContainerDiskPath
 	}
 	meta := buildVmBoxMetadata(vmName, vmSpec)
-	metaJSON, err := json.Marshal(meta)
+	localRef := containerDiskLocalRef(vmName, meta.Version)
+	if err := deploykit.EmitVmBoxAt(engine, localRef, meta, diskPath, inImagePath); err != nil {
+		return publishResult{}, fmt.Errorf("vm box publish: emitting the local containerDisk box %s: %w", localRef, err)
+	}
+	if out, err := exec.Command("skopeo", skopeoCopyArgs(localRef, ref, insecure)...).CombinedOutput(); err != nil {
+		return publishResult{}, fmt.Errorf("vm box publish: skopeo copy %s -> %s: %w: %s", localRef, ref, err, strings.TrimSpace(string(out)))
+	}
+	raw, err := exec.Command("skopeo", skopeoInspectRawArgs(ref, insecure)...).Output()
 	if err != nil {
-		return nil, nil, fmt.Errorf("vm box publish: marshaling metadata: %w", err)
+		return publishResult{}, fmt.Errorf("vm box publish: inspecting the pushed %s: %w", ref, err)
 	}
-	labels := map[string]string{spec.LabelVmBox: string(metaJSON)}
-	if meta.Version != "" {
-		labels[spec.LabelVersion] = meta.Version
-	}
-	if meta.Description != "" {
-		if descJSON, derr := json.Marshal(meta.Description); derr == nil {
-			labels[spec.LabelDescription] = string(descJSON)
-		}
-	}
-	params, err := json.Marshal(containerDiskEmitRequest{
-		DiskPath:    diskPath,
-		InImagePath: inImagePath,
-		Labels:      labels,
-		Ref:         ref,
-		Insecure:    insecure,
-		LayoutDir:   layoutDir,
-	})
+	mt, err := containerDiskMediaType(raw)
 	if err != nil {
-		return nil, nil, err
+		return publishResult{}, fmt.Errorf("vm box publish: %w", err)
 	}
-	envJSON, err := json.Marshal(map[string]string{"oci_op": "container-disk-emit"})
-	if err != nil {
-		return nil, nil, err
+	if mt != containerDiskGzipLayer {
+		return publishResult{}, fmt.Errorf("vm box publish: pushed layer media type %q (want %q — the containerDisk +gzip contract)", mt, containerDiskGzipLayer)
 	}
-	return params, envJSON, nil
+	digestOut, derr := exec.Command("skopeo", skopeoInspectDigestArgs(ref, insecure)...).Output()
+	if derr != nil {
+		return publishResult{}, fmt.Errorf("vm box publish: reading the pushed digest: %w", derr)
+	}
+	return publishResult{Ref: ref, Digest: strings.TrimSpace(string(digestOut)), MediaType: mt, LocalRef: localRef}, nil
 }
 
-// validateContainerDiskReply is the PURE result guard: a successful emit must
-// report a digest, and the layer must be the +gzip form Fleet/KubeVirt require
-// (a green ref over an uncompressed layer would be a contract regression).
-func validateContainerDiskReply(reply containerDiskEmitReply) error {
-	if reply.Digest == "" {
-		return fmt.Errorf("vm box publish: verb:oci returned no digest (the emit did not complete)")
+// containerDiskLocalRef is the local engine tag the containerDisk box is emitted
+// under. It is DISTINCT from the from-box VM-box ref (localhost/charly-<vm>:<v>,
+// whose disk lives at /disk.qcow2), so the two artifacts never collide.
+func containerDiskLocalRef(vmName, calver string) string {
+	return fmt.Sprintf("localhost/charly-%s-containerdisk:%s", vmName, calver)
+}
+
+// skopeoCopyArgs is the exact push argv: OCI manifest type, gzip-compressed
+// destination layers (the +gzip contract), and TLS disabled for an insecure
+// (plain-HTTP) registry.
+func skopeoCopyArgs(localRef, to string, insecure bool) []string {
+	args := []string{"copy", "--format", "oci", "--dest-compress", "--dest-compress-format", "gzip"}
+	if insecure {
+		args = append(args, "--dest-tls-verify=false")
 	}
-	if reply.MediaType != "application/vnd.oci.image.layer.v1.tar+gzip" {
-		return fmt.Errorf("vm box publish: verb:oci emitted layer media type %q (want application/vnd.oci.image.layer.v1.tar+gzip)", reply.MediaType)
+	return append(args, "containers-storage:"+localRef, "docker://"+to)
+}
+
+// skopeoInspectRawArgs fetches the pushed manifest JSON.
+func skopeoInspectRawArgs(ref string, insecure bool) []string {
+	args := []string{"inspect", "--raw"}
+	if insecure {
+		args = append(args, "--tls-verify=false")
 	}
-	return nil
+	return append(args, "docker://"+ref)
+}
+
+// skopeoInspectDigestArgs fetches the pushed manifest digest.
+func skopeoInspectDigestArgs(ref string, insecure bool) []string {
+	args := []string{"inspect", "--format", "{{.Digest}}"}
+	if insecure {
+		args = append(args, "--tls-verify=false")
+	}
+	return append(args, "docker://"+ref)
+}
+
+// containerDiskMediaType is the PURE manifest guard: parse the pushed OCI
+// manifest and return its single disk layer's media type. An index (no layers)
+// or a multi-layer manifest is not a containerDisk and is an error.
+func containerDiskMediaType(rawManifest []byte) (string, error) {
+	var m struct {
+		Layers []struct {
+			MediaType string `json:"mediaType"`
+		} `json:"layers"`
+	}
+	if err := json.Unmarshal(rawManifest, &m); err != nil {
+		return "", fmt.Errorf("decoding the pushed manifest: %w", err)
+	}
+	if len(m.Layers) != 1 {
+		return "", fmt.Errorf("pushed manifest has %d layers (a containerDisk is a scratch image with exactly one)", len(m.Layers))
+	}
+	return m.Layers[0].MediaType, nil
 }
