@@ -91,8 +91,8 @@ func containerDiskLayerDigest(platformManifestJSON []byte) (string, string, erro
 	if err := json.Unmarshal(platformManifestJSON, &m); err != nil {
 		return "", "", fmt.Errorf("decoding platform manifest: %w", err)
 	}
-	if len(m.Layers) == 0 {
-		return "", "", fmt.Errorf("containerDisk manifest has no layers (expected one holding the disk)")
+	if len(m.Layers) != 1 {
+		return "", "", fmt.Errorf("containerDisk manifest has %d layers (expected exactly one holding the disk)", len(m.Layers))
 	}
 	return m.Layers[0].Digest, m.Layers[0].MediaType, nil
 }
@@ -205,11 +205,11 @@ func containerDiskCacheIdentity(platformDigest string, rawManifestJSON []byte) s
 // contains the hex — so a transport-layout change fails loudly at ONE seam instead of silently
 // after a full registry round-trip.
 func resolveLayoutBlob(dir, digest string) (string, error) {
-	hex := strings.TrimPrefix(digest, "sha256:")
+	hexDigest := strings.TrimPrefix(digest, "sha256:")
 	candidates := []string{
-		filepath.Join(dir, hex),                                  // skopeo dir: transport
+		filepath.Join(dir, hexDigest),                            // skopeo dir: transport
 		filepath.Join(dir, strings.Replace(digest, ":", "-", 1)), // alt: sha256-<hex>
-		filepath.Join(dir, "blobs", "sha256", hex),               // OCI image layout
+		filepath.Join(dir, "blobs", "sha256", hexDigest),         // OCI image layout
 		filepath.Join(dir, digest),                               // rare: sha256:<hex>
 	}
 	for _, c := range candidates {
@@ -220,7 +220,7 @@ func resolveLayoutBlob(dir, digest string) (string, error) {
 	// Last resort: any entry whose name ends with the hex (covers prefixed layouts).
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), hex) {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), hexDigest) {
 			return filepath.Join(dir, e.Name()), nil
 		}
 	}

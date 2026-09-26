@@ -79,6 +79,23 @@ func TestContainerDiskLayerDigest(t *testing.T) {
 	}
 }
 
+// A manifest with ZERO or MORE THAN ONE layer is NOT a containerDisk (its contract is a
+// scratch image whose ONE layer is the disk). Both must be rejected, not silently read as
+// layers[0] — the multi-layer case is the one the comment promised but the code did not enforce.
+func TestContainerDiskLayerDigest_RejectsNonSingleLayer(t *testing.T) {
+	const zero = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}`
+	const multi = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[` +
+		`{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:aaa","size":1},` +
+		`{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:bbb","size":1}]}`
+	for name, m := range map[string]string{"zero layers": zero, "multi layer": multi} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := containerDiskLayerDigest([]byte(m)); err == nil {
+				t.Errorf("%s: expected a rejection (a containerDisk has exactly one layer)", name)
+			}
+		})
+	}
+}
+
 // The media type — not a byte sniff — decides gzip. Both real forms are accepted:
 // Cua's +gzip and a buildah-emitted uncompressed tar.
 func TestIsGzipLayer(t *testing.T) {
