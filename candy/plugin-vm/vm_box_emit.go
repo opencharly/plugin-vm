@@ -5,20 +5,32 @@ package vm
 // build materializes a disk, this step wraps the disk + the resolved entity's
 // metadata into a VM box image in local container-engine storage: an OCI image
 // whose labels carry the spec.VmBoxMetadata contract (whole-struct JSON on
-// spec.LabelVmBox) and whose single layer carries the disk artifact at
-// /disk.qcow2. The emitter is deploykit.EmitVmBox (sdk PR #202); its read-back
-// side (deploykit.VmCapabilitiesFromLabels) is what a future
-// `charly deploy from-box vm:<ref>` consumes (cutover task 5).
+// spec.LabelVmBox) and whose single layer carries the disk artifact. The emitter
+// is deploykit.EmitVmBoxAt; its read-back side (deploykit.VmCapabilitiesFromLabels)
+// is what a `charly deploy from-box vm:<ref>` consumes (cutover task 5).
 //
-// Best-effort by contract: the disk build is the primary artifact and the box
-// is its metadata wrapper, so a missing engine or a failed emit only warns and
-// leaves the build green — the drive never fails on box emission.
+// Two in-image disk layouts ship, chosen by the caller:
+//   - the DEFAULT VM-box path /disk.qcow2 (deploykit.VmBoxDiskPath) — the
+//     from-box vm: layout;
+//   - the KubeVirt containerDisk contract /disk/disk.img
+//     (deploykit.ContainerDiskPath), the layout a KubeVirt cluster boots
+//     directly (VMI `containerDisk:`), selected by `charly vm build
+//     --container-disk` (plan WS-6.3, the charly-box → containerDisk payload).
+//
+// `charly vm build --push <ref>` additionally publishes the emitted box to a
+// registry-pullable ref (the delivery half of WS-6.3); the emit itself stays
+// best-effort (a failed emit never fails the disk build) UNLESS a push was
+// requested — an explicit delivery request makes both steps load-bearing.
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/opencharly/sdk/deploykit"
+	"github.com/opencharly/spec/container"
 	"github.com/opencharly/spec/spec"
 )
 
@@ -69,21 +81,70 @@ func buildVmBoxMetadata(vmName string, vmSpec *VmSpec) *spec.VmBoxMetadata {
 // emitVmBox wraps a materialized disk + the entity's metadata into a VM box
 // image in local engine storage and tags it
 // `localhost/charly-<vmName>:<calver>` — the local-storage convention the
-// bootc images already use (CalVer-tagged, never pushed by the build). It
-// returns the box ref so the caller can print it.
+// bootc images already use. It returns the box ref so the caller can print it.
+//
+// inImagePath selects where the disk lands INSIDE the image: the empty string
+// uses the default VM-box path (deploykit.VmBoxDiskPath, /disk.qcow2);
+// deploykit.ContainerDiskPath (/disk/disk.img) emits the KubeVirt containerDisk
+// layout a cluster boots directly. The path is validated by EmitVmBoxAt.
 //
 // The engine string is the drive's resolved engine (reply.Engine — "podman" on
-// this host). deploykit.EmitVmBox runs the engine build; the error is returned
-// unwrapped so the caller decides how to surface it (the drive warns and keeps
-// the disk build's success).
-func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath string) (string, error) {
+// this host). The error is returned unwrapped so the caller decides how to
+// surface it (the drive warns and keeps the disk build's success).
+func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath string) (string, error) {
 	if vmSpec == nil {
 		return "", fmt.Errorf("emitVmBox: nil vm spec")
 	}
 	meta := buildVmBoxMetadata(vmName, vmSpec)
 	ref := fmt.Sprintf("localhost/charly-%s:%s", vmName, meta.Version)
-	if err := deploykit.EmitVmBox(engine, ref, meta, diskPath); err != nil {
+	path := inImagePath
+	if path == "" {
+		path = deploykit.VmBoxDiskPath
+	}
+	if err := deploykit.EmitVmBoxAt(engine, ref, meta, diskPath, path); err != nil {
 		return "", fmt.Errorf("emitting VM box %s: %w", ref, err)
 	}
 	return ref, nil
+}
+
+// boxInImagePath maps the `--container-disk` choice onto the in-image path the
+// emitter writes: the KubeVirt containerDisk contract when set, the default
+// VM-box layout (empty → the emitter's /disk.qcow2) otherwise. Pure.
+func boxInImagePath(containerDisk bool) string {
+	if containerDisk {
+		return deploykit.ContainerDiskPath
+	}
+	return ""
+}
+
+// engineCmd runs one container-engine subcommand for the box-delivery path. A
+// package var so the push argv is unit-testable without a live engine.
+var engineCmd = func(binary string, args ...string) error {
+	cmd := exec.Command(binary, args...)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w", binary, strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+// pushVmBox publishes a locally-emitted VM box to dstRef so a target cluster can
+// pull it: it retags the local image to the destination ref (via retagImage — the
+// ONE tag primitive; a no-op when the caller already passed the target ref) and
+// pushes it with the engine. The retag is local and cheap; the push is the
+// delivery.
+func pushVmBox(engine, srcRef, dstRef string) error {
+	if dstRef == "" {
+		return fmt.Errorf("pushVmBox: empty destination ref")
+	}
+	if srcRef != "" {
+		if err := retagImage(engine, srcRef, dstRef); err != nil {
+			return err
+		}
+	}
+	if err := engineCmd(container.EngineBinary(engine), "push", dstRef); err != nil {
+		return fmt.Errorf("pushing %s: %w", dstRef, err)
+	}
+	return nil
 }
