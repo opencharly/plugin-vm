@@ -16,3 +16,4 @@ host-builds this plugin with `CGO_ENABLED=0`, so the artifact is a static
 binary, which is what an armv7 appliance without a glibc toolchain (such as a
 JetKVM's uClibc userland) runs. Nothing extra is needed to use it: install
 `charly` and it builds the plugin for the host it runs on.
+l
