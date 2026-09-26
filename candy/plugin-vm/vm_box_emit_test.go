@@ -18,7 +18,9 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/opencharly/sdk/deploykit"
 	"github.com/opencharly/spec/spec"
@@ -154,7 +156,7 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	vmName := "vm-box-emit-test"
 	want := buildVmBoxMetadata(vmName, s)
 
-	ref, err := emitVmBox("podman", vmName, s, diskPath)
+	ref, err := emitVmBox("podman", vmName, s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -174,5 +176,107 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("VM box metadata did not round-trip through the emitted image:\n in: %+v\nout: %+v", want, got)
+	}
+}
+
+// TestBoxInImagePath pins the --container-disk → in-image path mapping: set emits
+// the KubeVirt containerDisk contract (/disk/disk.img); unset keeps the emitter's
+// default VM-box layout (empty path → /disk.qcow2).
+func TestBoxInImagePath(t *testing.T) {
+	if got := boxInImagePath(true); got != deploykit.ContainerDiskPath {
+		t.Errorf("boxInImagePath(true) = %q, want the containerDisk contract %q", got, deploykit.ContainerDiskPath)
+	}
+	if got := boxInImagePath(false); got != "" {
+		t.Errorf("boxInImagePath(false) = %q, want the default (\"\")", got)
+	}
+}
+
+// TestPushVmBox_Argv pins the push argv: a srcRef different from dstRef retags
+// then pushes; an equal (or empty) srcRef skips the tag and pushes only; an empty
+// destination is rejected before any engine call. The engine is stubbed, so no
+// registry or live engine is needed.
+func TestPushVmBox_Argv(t *testing.T) {
+	orig := engineCmd
+	t.Cleanup(func() { engineCmd = orig })
+
+	var calls [][]string
+	engineCmd = func(binary string, args ...string) error {
+		calls = append(calls, append([]string{binary}, args...))
+		return nil
+	}
+
+	wantPush := []string{"podman", "push", "reg.example/charly-vm:1"}
+
+	if err := pushVmBox("podman", "localhost/charly-vm:1", "reg.example/charly-vm:1"); err != nil {
+		t.Fatalf("pushVmBox: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("want tag+push (2 engine calls), got %d: %v", len(calls), calls)
+	}
+	wantTag := []string{"podman", "tag", "localhost/charly-vm:1", "reg.example/charly-vm:1"}
+	if !reflect.DeepEqual(calls[0], wantTag) {
+		t.Errorf("tag argv = %v, want %v", calls[0], wantTag)
+	}
+	if !reflect.DeepEqual(calls[1], wantPush) {
+		t.Errorf("push argv = %v, want %v", calls[1], wantPush)
+	}
+
+	// Same ref: the tag is skipped, push only.
+	calls = nil
+	if err := pushVmBox("podman", "reg.example/charly-vm:1", "reg.example/charly-vm:1"); err != nil {
+		t.Fatalf("pushVmBox (same ref): %v", err)
+	}
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0], wantPush) {
+		t.Errorf("same-ref push calls = %v, want just %v", calls, wantPush)
+	}
+
+	// Empty destination is rejected before any engine call.
+	calls = nil
+	if err := pushVmBox("podman", "src", ""); err == nil {
+		t.Error("pushVmBox with an empty destination should error")
+	}
+	if len(calls) != 0 {
+		t.Errorf("empty-destination push made engine calls: %v", calls)
+	}
+}
+
+// TestPushVmBox_Live is the LIVE delivery proof of `--push`: it emits a
+// containerDisk-layout box, pushes it to a REAL registry named by
+// CHARLY_TEST_REGISTRY (e.g. localhost:5000), and re-pulls it to prove the ref is
+// registry-consumable. LIVE-OR-SKIP by contract: with CHARLY_TEST_REGISTRY unset
+// the test SKIPS cleanly (visibly) — it never mocks the registry boundary.
+func TestPushVmBox_Live(t *testing.T) {
+	reg := os.Getenv("CHARLY_TEST_REGISTRY")
+	if reg == "" {
+		t.Skip("CHARLY_TEST_REGISTRY unset — skipping the live registry push (LIVE-OR-SKIP; set it to a real registry, e.g. localhost:5000)")
+	}
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skipf("podman not available on this host — skipping the live registry push: %v", err)
+	}
+
+	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("writing fixture disk: %v", err)
+	}
+
+	s := emitFixtureSpec()
+	srcRef, err := emitVmBox("podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
+	if err != nil {
+		t.Fatalf("emitVmBox: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", srcRef).Run() })
+
+	dstRef := reg + "/charly-vm-box-push-test:" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", dstRef).Run() })
+
+	if err := pushVmBox("podman", srcRef, dstRef); err != nil {
+		t.Fatalf("pushVmBox to %s: %v", dstRef, err)
+	}
+
+	// Prove the ref is really registry-consumable: drop the local copy, pull it
+	// back by the pushed ref.
+	_ = exec.Command("podman", "rmi", "-f", dstRef).Run()
+	if out, err := exec.Command("podman", "pull", dstRef).CombinedOutput(); err != nil {
+		t.Fatalf("pulling the pushed ref %s back failed: %v\n%s", dstRef, err, out)
 	}
 }

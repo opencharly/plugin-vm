@@ -23,15 +23,17 @@ import (
 // privileged-container / qemu-img / bootc-install / cloud-init exec itself and prints its own
 // progress to the shared stdio (compiled-in, so os.Stderr is the operator's terminal).
 type VmBuildCmd struct {
-	Box          string `arg:"" help:"Bootc image name"`
-	Size         string `name:"size" help:"Override disk size (e.g. 20G, '20 GiB')"`
-	RootSize     string `name:"root-size" help:"Override root partition size (e.g. 10G)"`
-	Tag          string `name:"tag" help:"Image tag override"`
-	Type         string `name:"type" default:"qcow2" help:"Output format: qcow2, raw"`
-	Transport    string `name:"transport" help:"Image transport: registry, containers-storage, oci, oci-archive"`
-	Console      bool   `name:"console" help:"Enable console output for debugging"`
-	Force        bool   `name:"force" help:"Rebuild the disk base even when content-fresh (default: skip if the base already matches the source). SINGLE-BED ONLY — do NOT force-rebuild a base that live per-domain overlays back onto (it mutates a read-only backing file); the concurrent-bed R10 uses idempotent-skip, never --force."`
-	FromSnapshot string `name:"from-snapshot" help:"Build the entity's disk as a CLONE of its own golden at this snapshot (the unified from: name:tag functional half — the deploy's from_snapshot flows here)."`
+	Box           string `arg:"" help:"Bootc image name"`
+	Size          string `name:"size" help:"Override disk size (e.g. 20G, '20 GiB')"`
+	RootSize      string `name:"root-size" help:"Override root partition size (e.g. 10G)"`
+	Tag           string `name:"tag" help:"Image tag override"`
+	Type          string `name:"type" default:"qcow2" help:"Output format: qcow2, raw"`
+	Transport     string `name:"transport" help:"Image transport: registry, containers-storage, oci, oci-archive"`
+	Console       bool   `name:"console" help:"Enable console output for debugging"`
+	Force         bool   `name:"force" help:"Rebuild the disk base even when content-fresh (default: skip if the base already matches the source). SINGLE-BED ONLY — do NOT force-rebuild a base that live per-domain overlays back onto (it mutates a read-only backing file); the concurrent-bed R10 uses idempotent-skip, never --force."`
+	FromSnapshot  string `name:"from-snapshot" help:"Build the entity's disk as a CLONE of its own golden at this snapshot (the unified from: name:tag functional half — the deploy's from_snapshot flows here)."`
+	ContainerDisk bool   `name:"container-disk" help:"Emit the VM box with the disk at /disk/disk.img (the KubeVirt containerDisk contract a cluster boots directly) instead of the default /disk.qcow2."`
+	Push          string `name:"push" help:"After emitting, retag and push the VM box image to this registry-pullable ref (the WS-6.3 delivery half). An explicit push makes the emit and the push load-bearing."`
 }
 
 func (c *VmBuildCmd) Run() error {
@@ -46,13 +48,22 @@ func (c *VmBuildCmd) Run() error {
 		Box: c.Box, Size: c.Size, RootSize: c.RootSize, Tag: c.Tag,
 		Type: c.Type, Transport: c.Transport, Console: c.Console, Force: c.Force,
 		FromSnapshot: c.FromSnapshot,
-	})
+	}, vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push})
+}
+
+// vmBoxEmitOpts carries the box-emission choices that are NOT part of the
+// spec.VmBuildRequest wire (they select the emitted box layout + delivery, a
+// plugin-local concern): ContainerDisk emits the KubeVirt /disk/disk.img layout,
+// Push publishes the emitted box to a registry-pullable ref.
+type vmBoxEmitOpts struct {
+	ContainerDisk bool
+	Push          string
 }
 
 // runVmBuildDrive runs the standard `charly vm build` pipeline for one entity:
 // resolve → per-entity flock → per-source-kind dispatch. Shared by VmBuildCmd.Run
 // and the clone command's --build leg (R3 — one drive, no duplicated dispatch).
-func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
+func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
 	if cmdExec == nil {
 		return fmt.Errorf("vm build: no host reverse channel (command not compiled-in?)")
 	}
@@ -171,15 +182,30 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest) error {
 		return fmt.Errorf("vm %q: unsupported source.kind %q (want one of %s)", box, reply.SourceKind, strings.Join(knownVmSourceKinds, ", "))
 	}
 
-	// Box emission (cutover plan task 3): after EVERY successful source-kind
-	// build, wrap the materialized disk + the entity's metadata into a VM box
-	// image on local engine storage, tagged with the current CalVer. BEST-EFFORT
-	// by contract — the disk build is the primary artifact and the box is its
-	// metadata wrapper — so a missing engine or a failed emit only warns and the
-	// build stays green (never fail the build on box emission).
+	// Box emission (cutover plan task 3 / WS-6.3): after EVERY successful
+	// source-kind build, wrap the materialized disk + the entity's metadata into
+	// a VM box image on local engine storage, tagged with the current CalVer.
+	//
+	// Default: BEST-EFFORT by contract — the disk build is the primary artifact
+	// and the box is its metadata wrapper — so a missing engine or a failed emit
+	// only warns and the build stays green. An explicit `--push` makes BOTH the
+	// emit and the push load-bearing: the operator asked for a deliverable image,
+	// so a failure is returned rather than silently skipped.
 	vmName, _ := parseImageArg(box)
-	if ref, err := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: VM box emission skipped for %q (the disk build succeeded): %v\n", box, err)
+	ref, emitErr := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk, boxInImagePath(emit.ContainerDisk))
+	if emit.Push != "" {
+		if emitErr != nil {
+			return fmt.Errorf("box emission for --push: %w", emitErr)
+		}
+		if err := pushVmBox(reply.Engine, ref, emit.Push); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Wrote VM box %s\n", ref)
+		fmt.Fprintf(os.Stderr, "Pushed VM box %s\n", emit.Push)
+		return nil
+	}
+	if emitErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: VM box emission skipped for %q (the disk build succeeded): %v\n", box, emitErr)
 	} else {
 		fmt.Fprintf(os.Stderr, "Wrote VM box %s\n", ref)
 	}
