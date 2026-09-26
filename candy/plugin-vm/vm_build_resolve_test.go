@@ -59,12 +59,14 @@ func TestVmBuildDeployFromHop_Qualified(t *testing.T) {
 	}
 }
 
-// TestResolveKindEntityBody_Qualified gates the CHANGED LINE directly:
-// resolveVmBuildEntity's body lookup is loaderkit.ResolveKindEntityBody(uf,
-// "vm", boxName) — a namespace-qualified box name (ns.entity) must resolve the
-// namespace's own template body. This test FAILS without the namespace-aware
-// ResolveKindEntityBody (sdk #247).
-func TestResolveKindEntityBody_Qualified(t *testing.T) {
+// TestVmBuildEntityBody_NamespaceQualified gates the CHANGED guard + lookup
+// directly: resolveVmBuildEntity resolves the body via vmBuildEntityBody, whose
+// guard is `uf == nil` (NOT the retired `uf.VM() == nil`). A namespace-qualified
+// box name (ns.entity) must resolve the namespace's own template body even though
+// the ROOT's uf.VM() is nil — the retired guard returned noVmEntityErr for exactly
+// this ref. This test FAILS if vmBuildEntityBody's guard is reverted to
+// uf.VM() == nil (the namespace body would never be reached).
+func TestVmBuildEntityBody_NamespaceQualified(t *testing.T) {
 	ns := &spec.UnifiedFile{
 		PluginKinds: map[string]map[string]json.RawMessage{
 			"vm": {"omarchy-vm": json.RawMessage("{}")},
@@ -73,13 +75,22 @@ func TestResolveKindEntityBody_Qualified(t *testing.T) {
 	uf := &spec.UnifiedFile{
 		Namespaces: map[string]*spec.UnifiedFile{"omarchy": ns},
 	}
-	body, ok := loaderkit.ResolveKindEntityBody(uf, "vm", "omarchy.omarchy-vm")
+	// The premise: the root's local-only VM() map is nil — the retired guard
+	// (uf.VM() == nil) would reject this ref before the qualified lookup runs.
+	if uf.VM() != nil {
+		t.Fatal("test assumption broken: root uf.VM() is non-nil, so the retired guard would not have fired")
+	}
+	body, ok := vmBuildEntityBody(uf, "omarchy.omarchy-vm")
 	if !ok || len(body) == 0 {
-		t.Fatal("ResolveKindEntityBody(omarchy.omarchy-vm) did not resolve the namespace template body")
+		t.Fatal("vmBuildEntityBody(omarchy.omarchy-vm) did not resolve the namespace template body")
 	}
 	// The unqualified form stays local-only (the no-leak contract).
-	if _, ok := loaderkit.ResolveKindEntityBody(uf, "vm", "omarchy-vm"); ok {
+	if _, ok := vmBuildEntityBody(uf, "omarchy-vm"); ok {
 		t.Fatal("unqualified namespace body leaked into the local scope")
+	}
+	// A nil project is a clean miss, never a panic.
+	if _, ok := vmBuildEntityBody(nil, "anything"); ok {
+		t.Fatal("vmBuildEntityBody(nil, ...) must miss")
 	}
 }
 
@@ -136,22 +147,23 @@ func TestBaseDiskPath(t *testing.T) {
 	}
 }
 
-// TestVmBuildDiskDir_LeafSymmetry is the RCA-F regression: `vm build` must key the
-// disk dir by the LEAF entity (entityLeaf(boxName)), the SAME convention every
-// READ path uses (baseDiskPath/BuildClone/vm_diagnose). Pre-fix `vm build` wrote
+// TestVmBuildOutputDir_LeafSymmetry is the RCA-F regression: `vm build` must key
+// the disk dir by the LEAF entity, the SAME convention every READ path uses
+// (baseDiskPath/BuildClone/vm_diagnose). Pre-fix `vm build` wrote
 // VmDiskDir(boxName) — the QUALIFIED name for a namespaced bed — while `vm create`
 // read `vmDiskDir(entityLeaf(entity))`, so a namespaced VM bed built its disk at
 // `image/<ns.bed>/` and then failed to create with
-// `disk.qcow2 not found at image/<leaf>/disk.qcow2`. This pins the write path to
-// the read path.
-func TestVmBuildDiskDir_LeafSymmetry(t *testing.T) {
+// `disk.qcow2 not found at image/<leaf>/disk.qcow2`. This drives the ONE expression
+// the resolveVmBuild call site emits (vmBuildOutputDir) and pins the write path to
+// the read path; it FAILS if vmBuildOutputDir keys by the qualified name.
+func TestVmBuildOutputDir_LeafSymmetry(t *testing.T) {
 	const qualified = "omarchy.check-charly-omarchy-vm"
 
-	// The write-side dir name — the SAME helper resolveVmBuild calls (NOT the literal
-	// expression), so reverting vmBuildDiskDirName to the qualified name fails this test.
-	writeDir, err := vmshared.VmDiskDir(vmBuildDiskDirName(qualified))
+	// The write-side dir — the SAME production function resolveVmBuild calls
+	// (NOT a literal re-implementation), so reverting its keying fails this test.
+	writeDir, err := vmBuildOutputDir(qualified)
 	if err != nil {
-		t.Fatalf("VmDiskDir(vmBuildDiskDirName): %v", err)
+		t.Fatalf("vmBuildOutputDir: %v", err)
 	}
 	// The read-side path (what baseDiskPath / vm create use).
 	readPath, err := baseDiskPath(qualified)
