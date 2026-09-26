@@ -44,11 +44,22 @@ func (c *VmBuildCmd) Run() error {
 	default:
 		return fmt.Errorf("unsupported disk type %q (valid: qcow2, raw)", c.Type)
 	}
-	return runVmBuildDrive(c.Box, spec.VmBuildRequest{
+	return vmBuildDrive(c.Box, spec.VmBuildRequest{
 		Box: c.Box, Size: c.Size, RootSize: c.RootSize, Tag: c.Tag,
 		Type: c.Type, Transport: c.Transport, Console: c.Console, Force: c.Force,
 		FromSnapshot: c.FromSnapshot,
-	}, vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push})
+	}, c.emitOpts())
+}
+
+// vmBuildDrive is the drive seam for `charly vm build`: a package var so the
+// command's flag → opts → drive wiring is unit-testable without a host reverse
+// channel. It is the ONE caller of runVmBuildDrive.
+var vmBuildDrive = runVmBuildDrive
+
+// emitOpts maps the command's box-emission flags onto the drive's options.
+// Pure, so the flag wiring is unit-testable.
+func (c *VmBuildCmd) emitOpts() vmBoxEmitOpts {
+	return vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push}
 }
 
 // vmBoxEmitOpts carries the box-emission choices that are NOT part of the
@@ -61,8 +72,9 @@ type vmBoxEmitOpts struct {
 }
 
 // runVmBuildDrive runs the standard `charly vm build` pipeline for one entity:
-// resolve → per-entity flock → per-source-kind dispatch. Shared by VmBuildCmd.Run
-// and the clone command's --build leg (R3 — one drive, no duplicated dispatch).
+// resolve → per-entity flock → per-source-kind dispatch → box emission. It is
+// the single drive behind the `charly vm build` command (R3 — one drive, no
+// duplicated dispatch).
 func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
 	if cmdExec == nil {
 		return fmt.Errorf("vm build: no host reverse channel (command not compiled-in?)")

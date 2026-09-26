@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,5 +279,92 @@ func TestPushVmBox_Live(t *testing.T) {
 	_ = exec.Command("podman", "rmi", "-f", dstRef).Run()
 	if out, err := exec.Command("podman", "pull", dstRef).CombinedOutput(); err != nil {
 		t.Fatalf("pulling the pushed ref %s back failed: %v\n%s", dstRef, err, out)
+	}
+}
+
+// TestVmBuildCmd_FlagWiring drives the COMMAND, not the helpers: with the drive
+// seam stubbed, VmBuildCmd.Run must pass the parsed flag values through to
+// runVmBuildDrive's opts. This is the coverage that FAILS without the
+// --container-disk/--push wiring (the helpers alone would still pass).
+func TestVmBuildCmd_FlagWiring(t *testing.T) {
+	orig := vmBuildDrive
+	t.Cleanup(func() { vmBuildDrive = orig })
+
+	var gotOpts vmBoxEmitOpts
+	var gotReq spec.VmBuildRequest
+	vmBuildDrive = func(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
+		gotOpts = emit
+		gotReq = req
+		return nil
+	}
+
+	cmd := &VmBuildCmd{Box: "myvm", Type: "qcow2", ContainerDisk: true, Push: "reg.example/box:1"}
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("VmBuildCmd.Run: %v", err)
+	}
+	if !gotOpts.ContainerDisk || gotOpts.Push != "reg.example/box:1" {
+		t.Errorf("flag wiring: Run passed opts %+v, want {ContainerDisk:true Push:reg.example/box:1}", gotOpts)
+	}
+	if gotReq.Box != "myvm" {
+		t.Errorf("request Box = %q, want myvm", gotReq.Box)
+	}
+
+	// Defaults: unset flags → the zero-value opts.
+	gotOpts = vmBoxEmitOpts{ContainerDisk: true, Push: "stale"}
+	cmd = &VmBuildCmd{Box: "myvm", Type: "qcow2"}
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("VmBuildCmd.Run (defaults): %v", err)
+	}
+	if gotOpts.ContainerDisk || gotOpts.Push != "" {
+		t.Errorf("default flag wiring: opts = %+v, want the zero value", gotOpts)
+	}
+}
+
+// TestEmitVmBox_ContainerDiskLayoutLive proves the generated box is a valid
+// KubeVirt containerDisk payload at its real boundary: emit with the
+// containerDisk path, then read the image rootfs with `podman create` +
+// `podman cp` and assert the disk is at /disk/disk.img and NOT at the VM-box
+// default /disk.qcow2 (KubeVirt scans /disk and boots the single file it finds).
+// The metadata label is read back from the SAME image. Skips without podman.
+func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skipf("podman not available on this host — skipping the containerDisk layout proof: %v", err)
+	}
+
+	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(diskPath, []byte("qcow2-fixture-payload"), 0o644); err != nil {
+		t.Fatalf("writing fixture disk: %v", err)
+	}
+
+	s := emitFixtureSpec()
+	srcRef, err := emitVmBox("podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
+	if err != nil {
+		t.Fatalf("emitVmBox(containerDisk): %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", srcRef).Run() })
+
+	// The metadata contract must ride the same image (R8: emitted artifact).
+	if _, err := deploykit.VmCapabilitiesFromLabels("podman", srcRef); err != nil {
+		t.Fatalf("VmCapabilitiesFromLabels on the containerDisk box: %v", err)
+	}
+
+	// Read the rootfs with a created (not running) container: `podman cp` reads a
+	// scratch image's files without needing a shell inside it.
+	cidOut, err := exec.Command("podman", "create", srcRef, "/bin/true").Output()
+	if err != nil {
+		t.Fatalf("podman create: %v", err)
+	}
+	cid := strings.TrimSpace(string(cidOut))
+	t.Cleanup(func() { _ = exec.Command("podman", "rm", "-f", cid).Run() })
+
+	got := filepath.Join(t.TempDir(), "disk.img")
+	if out, err := exec.Command("podman", "cp", cid+":/disk/disk.img", got).CombinedOutput(); err != nil {
+		t.Fatalf("the containerDisk payload has no /disk/disk.img: %v\n%s", err, out)
+	}
+	if b, err := os.ReadFile(got); err != nil || string(b) != "qcow2-fixture-payload" {
+		t.Errorf("extracted /disk/disk.img = %q (err=%v), want the fixture payload", b, err)
+	}
+	if out, err := exec.Command("podman", "cp", cid+":/disk.qcow2", filepath.Join(t.TempDir(), "x")).CombinedOutput(); err == nil {
+		t.Errorf("the containerDisk payload must NOT carry the VM-box default /disk.qcow2; cp succeeded:\n%s", out)
 	}
 }
