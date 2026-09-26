@@ -30,6 +30,7 @@ type VmCmd struct {
 	Gpu        VmGpuCmd        `cmd:"" help:"Inspect host VFIO/GPU-passthrough readiness (status, list)"`
 	Import     VmImportCmd     `cmd:"" help:"Adopt an existing libvirt-managed VM into charly configuration"`
 	List       VmListCmd       `cmd:"" help:"List VMs and their status"`
+	Retag      VmRetagCmd      `cmd:"" help:"Retag a locally-built VM box to a stable, addressable ref (e.g. a containerDisk image a KubeVirt entity can name)"`
 	Screenshot VmScreenshotCmd `cmd:"" help:"Capture the guest's screen to a PNG (works with no ssh, no network, no guest agent)"`
 	Scp        VmScpCmd        `cmd:"" help:"Copy a local file into a running VM guest over SSH"`
 	Seed       VmSeedCmd       `cmd:"" help:"Inspect the rendered installer answers volume (ls, cat)"`
