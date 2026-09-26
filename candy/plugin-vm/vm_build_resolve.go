@@ -143,7 +143,7 @@ func loadVmProjectUnified(ctx context.Context, ex *sdk.Executor, dir string) (*s
 // reach it directly; command:vm no longer needs to round-trip through core for this).
 func resolveVmBuildEntity(ctx context.Context, ex *sdk.Executor, dir, boxName string) (*VmSpec, error) {
 	uf, ok, err := loadVmProjectUnified(ctx, ex, dir)
-	if err != nil || !ok || uf.VM() == nil {
+	if err != nil || !ok || uf == nil {
 		return nil, noVmEntityErr(boxName)
 	}
 	// The canonical namespace-aware body lookup (loaderkit ResolveKindEntityBody
@@ -340,7 +340,7 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		engine = kit.EngineBinary(rt.RunEngine)
 	}
 
-	diskDir, err := vmshared.VmDiskDir(boxName)
+	diskDir, err := vmshared.VmDiskDir(entityLeaf(boxName))
 	if err != nil {
 		return spec.VmBuildReply{}, err
 	}
