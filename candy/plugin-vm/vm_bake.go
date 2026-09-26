@@ -23,10 +23,12 @@ import (
 
 // VmBakeCmd implements charly vm bake <name> [--candy a,b].
 type VmBakeCmd struct {
-	Box          string `arg:"" help:"VM name (the distro-bearing kind:vm entity whose golden snapshot bakes)"`
-	Candy        string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly deploy add vm:<name>)"`
-	Console      bool   `name:"console" help:"Enable console output for debugging the boot"`
-	FromSnapshot string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
+	Box           string `arg:"" help:"VM name (the distro-bearing kind:vm entity whose golden snapshot bakes)"`
+	Candy         string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly deploy add vm:<name>)"`
+	Console       bool   `name:"console" help:"Enable console output for debugging the boot"`
+	FromSnapshot  string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
+	ContainerDisk bool   `name:"container-disk" help:"Emit the baked box with the disk at /disk/disk.img (the KubeVirt containerDisk contract a cluster boots directly) instead of the default /disk.qcow2. This is the produce half for a Cua Fleet / KubeVirt image: the in-guest candy bake is frozen and delivered as a containerDisk."`
+	Push          string `name:"push" help:"After emitting, retag and push the baked box image to this registry-pullable ref. An explicit --push makes the delivery load-bearing."`
 }
 
 // Run executes charly vm bake.
@@ -112,13 +114,15 @@ func (c *VmBakeCmd) Run() error {
 		return fmt.Errorf("vm bake: snapshot freeze: %w", err)
 	}
 
-	// Phase 5 — wrap the frozen disk into the box image.
+	// Phase 5 — wrap the frozen disk into the box image. --container-disk emits
+	// the KubeVirt/Cua /disk/disk.img layout (boxInImagePath); an explicit
+	// --push then delivers the baked box to a registry — the produce half for a
+	// Cua Fleet / KubeVirt image (the in-guest candy bake IS the difference from
+	// `vm build`).
 	fmt.Fprintf(os.Stderr, "bake %q: phase 5 — emitting the VM box\n", c.Box)
-	ref, err := emitVmBox(engine, c.Box, vmSpec, entry.DiskPath, "")
-	if err != nil {
-		return fmt.Errorf("vm bake: emitting box: %w", err)
+	if err := runBakePhase5(engine, c.Box, vmSpec, entry, vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push}); err != nil {
+		return err
 	}
-	fmt.Printf("baked VM box %q (snapshot %q, disk %s)\n", ref, entry.Name, entry.DiskPath)
 
 	// Cleanup — stop the domain (the box is the artifact; the domain was the
 	// bake vessel).
@@ -126,6 +130,37 @@ func (c *VmBakeCmd) Run() error {
 	if err := stopCmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "vm bake: note: stopping the bake domain: %v\n", err)
 	}
+	return nil
+}
+
+// The bake's emit/push seams. Package vars so phase 5's flag wiring is
+// unit-testable without a live engine or registry (the engineCmd precedent);
+// they default to the ONE emit (emitVmBox) and push (pushVmBox) primitives.
+var (
+	bakeEmitBox = emitVmBox
+	bakePushBox = pushVmBox
+)
+
+// runBakePhase5 is phase 5 of `charly vm bake`: emit the frozen disk as a VM box
+// and, with an explicit --push, deliver it. The in-image path comes from
+// boxInImagePath(emit.ContainerDisk) — the SAME flag→path mapping `vm build`
+// uses, so a baked box lands at the KubeVirt/Cua /disk/disk.img contract. The
+// emit is load-bearing (a bake that cannot emit its box has not produced its
+// artifact); --push additionally makes the delivery load-bearing.
+func runBakePhase5(engine, box string, vmSpec *VmSpec, entry *SnapshotEntry, emit vmBoxEmitOpts) error {
+	ref, emitErr := bakeEmitBox(engine, box, vmSpec, entry.DiskPath, boxInImagePath(emit.ContainerDisk))
+	if emitErr != nil {
+		return fmt.Errorf("vm bake: emitting box: %w", emitErr)
+	}
+	if emit.Push != "" {
+		if err := bakePushBox(engine, ref, emit.Push); err != nil {
+			return fmt.Errorf("vm bake: pushing box: %w", err)
+		}
+		fmt.Printf("baked VM box %q (snapshot %q, disk %s)\n", ref, entry.Name, entry.DiskPath)
+		fmt.Printf("pushed VM box %s\n", emit.Push)
+		return nil
+	}
+	fmt.Printf("baked VM box %q (snapshot %q, disk %s)\n", ref, entry.Name, entry.DiskPath)
 	return nil
 }
 
