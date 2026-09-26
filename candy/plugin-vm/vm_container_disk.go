@@ -185,6 +185,35 @@ func containerDiskCacheDir(src VmSource) (string, error) {
 	return filepath.Join(root, strings.NewReplacer(":", "-", "/", "-").Replace(key)), nil
 }
 
+// resolveLayoutBlob returns the on-disk path of the blob for `digest` in a layout directory
+// produced by `skopeo copy … dir:<dir>`. The `dir:` transport writes blobs named by the BARE
+// hex digest (measured on skopeo 1.14: sha256:07b912… → ./07b912…), whereas an OCI image
+// layout uses blobs/sha256/<hex>. Try each, and fall back to scanning for a file whose name
+// contains the hex — so a transport-layout change fails loudly at ONE seam instead of silently
+// after a full registry round-trip.
+func resolveLayoutBlob(dir, digest string) (string, error) {
+	hex := strings.TrimPrefix(digest, "sha256:")
+	candidates := []string{
+		filepath.Join(dir, hex),                                  // skopeo dir: transport
+		filepath.Join(dir, strings.Replace(digest, ":", "-", 1)), // alt: sha256-<hex>
+		filepath.Join(dir, "blobs", "sha256", hex),               // OCI image layout
+		filepath.Join(dir, digest),                               // rare: sha256:<hex>
+	}
+	for _, c := range candidates {
+		if fileExists(c) {
+			return c, nil
+		}
+	}
+	// Last resort: any entry whose name ends with the hex (covers prefixed layouts).
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), hex) {
+			return filepath.Join(dir, e.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("layer blob for %s not found in layout %s (looked for %v)", digest, dir, candidates)
+}
+
 // skopeoRawManifest returns the raw manifest JSON for an OCI ref via `skopeo inspect
 // --raw`, honouring `--override-arch amd64` so a multi-arch index resolves to the
 // platform this build targets. It is a package var so the unit gate can inject a fixture
@@ -372,10 +401,17 @@ func pullContainerDisk(src VmSource, cacheDir, cachedDisk, digestMarker string, 
 		return err
 	}
 
-	layerBlob := filepath.Join(layoutDir, strings.Replace(layerDigest, ":", "-", 1))
+	// Locate the layer blob. skopeo's `dir:` transport names blobs by the BARE hex digest
+	// (the measured layout: a 554-byte file literally named 07b912eb… for sha256:07b912eb…),
+	// while an OCI layout uses blobs/sha256/<hex>. Try each known form rather than assuming
+	// one — the live pull test is what caught the original single-form assumption.
+	layerBlob, err := resolveLayoutBlob(layoutDir, layerDigest)
+	if err != nil {
+		return err
+	}
 	f, err := os.Open(layerBlob)
 	if err != nil {
-		return fmt.Errorf("opening layer blob %s: %w (skopeo dir layout missing the layer?)", layerBlob, err)
+		return fmt.Errorf("opening layer blob %s: %w", layerBlob, err)
 	}
 	defer func() { _ = f.Close() }()
 

@@ -12,8 +12,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 const indexFixture = `{
@@ -167,6 +170,108 @@ func TestExtractDiskFromLayerTar_MissingDisk(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(err.Error()), []byte("/disk/disk.img")) {
 		t.Errorf("error must name the wanted path, got: %v", err)
+	}
+}
+
+// TestBuildContainerDiskLive is the LIVE end-to-end proof of the arm's engine: it builds a
+// real OCI containerDisk artifact (a qcow2 at /disk/disk.img — the KubeVirt contract),
+// pushes it to a REAL registry, and drives BuildContainerDisk against it — the actual
+// skopeo inspect → index/manifest resolve → skopeo copy → layer tar extract → qemu-img
+// format assert → per-VM copy chain, with the disk landing in the output dir.
+//
+// Gated on LIVE_CONTAINER_DISK_REGISTRY (the real service): unset → SKIP, visibly. Never a
+// mock — a fake registry would assert the behaviour the author imagined, not what the wire
+// does. Run it against a local `registry:2`:
+//
+//	podman run -d -p 5000:5000 --name cua-test-registry docker.io/library/registry:2
+//	LIVE_CONTAINER_DISK_REGISTRY=localhost:5000 go test -run TestBuildContainerDiskLive -v
+func TestBuildContainerDiskLive(t *testing.T) {
+	reg := os.Getenv("LIVE_CONTAINER_DISK_REGISTRY")
+	if reg == "" {
+		t.Skip("LIVE_CONTAINER_DISK_REGISTRY unset — skipping the live containerDisk pull (no real registry)")
+	}
+	for _, bin := range []string{"skopeo", "qemu-img", "podman"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not available — skipping the live containerDisk pull: %v", bin, err)
+		}
+	}
+
+	// 1. Build the artifact: a scratch image carrying a REAL qcow2 at /disk/disk.img.
+	tmp := t.TempDir()
+	disk := filepath.Join(tmp, "disk.img")
+	if out, err := exec.Command("qemu-img", "create", "-f", "qcow2", disk, "8M").CombinedOutput(); err != nil {
+		t.Fatalf("qemu-img create: %v\n%s", err, out)
+	}
+	cf := filepath.Join(tmp, "Containerfile")
+	if err := os.WriteFile(cf, []byte("FROM scratch\nCOPY disk.img /disk/disk.img\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ref := reg + "/cua-test/containerd:" + strings.ReplaceAll(time.Now().Format("150405.000000"), ".", "")
+	if out, err := exec.Command("podman", "build", "-t", ref, "-f", cf, tmp).CombinedOutput(); err != nil {
+		t.Fatalf("podman build: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", ref).Run() })
+	// A localhost test registry serves plain HTTP; mark it insecure via a test-scoped
+	// registries.conf (skopeo inherits CONTAINERS_REGISTRIES_CONF), leaving production
+	// untouched. The real corpus is an HTTPS registry and needs none of this.
+	regConf := filepath.Join(tmp, "registries.conf")
+	host, _, _ := strings.Cut(reg, ":")
+	if err := os.WriteFile(regConf, []byte("[[registry]]\nlocation = \""+host+"\"\ninsecure = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONTAINERS_REGISTRIES_CONF", regConf)
+	tlsArgs := []string{}
+	if host == "localhost" || host == "127.0.0.1" {
+		tlsArgs = append(tlsArgs, "--tls-verify=false")
+	}
+	// Push the TAG (a digest push would force a layer-representation change) and capture the
+	// pushed digest via --digestfile — RepoDigests is unreliable here because identical
+	// content can be shared across local repos.
+	digestFile := filepath.Join(tmp, "pushed-digest.txt")
+	pushArgs := append(append([]string{"push", "--digestfile", digestFile}, tlsArgs...), ref)
+	if out, err := exec.Command("podman", pushArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("podman push %s: %v\n%s", ref, err, out)
+	}
+	rawDigest, err := os.ReadFile(digestFile)
+	if err != nil {
+		t.Fatalf("read pushed digest: %v", err)
+	}
+	pinned := reg + "/cua-test/containerd@" + strings.TrimSpace(string(rawDigest))
+	if !strings.Contains(pinned, "@sha256:") {
+		t.Fatalf("no pushed digest: %q", pinned)
+	}
+
+	// 2. Drive the engine. Cache dir under the test's temp so the run is hermetic.
+	outDir := filepath.Join(tmp, "out")
+	stateDir := filepath.Join(tmp, "state")
+	for _, d := range []string{outDir, stateDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vmspec := &VmSpec{
+		DiskSize: "",
+		Source:   VmSource{Kind: "container_disk", Image: pinned, Cache: filepath.Join(tmp, "cache")},
+	}
+	res, err := BuildContainerDisk(vmspec, outDir, stateDir, nil, true)
+	if err != nil {
+		t.Fatalf("BuildContainerDisk(%s): %v", pinned, err)
+	}
+
+	// 3. Assert the disk really landed and is a bootable qcow2 (the format the boot path needs).
+	if _, err := os.Stat(res.DiskPath); err != nil {
+		t.Fatalf("built disk missing at %s: %v", res.DiskPath, err)
+	}
+	info, err := exec.Command("qemu-img", "info", "--output", "json", res.DiskPath).Output()
+	if err != nil {
+		t.Fatalf("qemu-img info on the pulled disk: %v", err)
+	}
+	if !bytes.Contains(info, []byte(`"format": "qcow2"`)) {
+		t.Errorf("pulled disk is not qcow2: %s", info)
+	}
+	// The seed ISO is the cloud_image-equivalent artifact.
+	if _, err := os.Stat(res.SeedIsoPath); err != nil {
+		t.Errorf("seed ISO missing at %s: %v", res.SeedIsoPath, err)
 	}
 }
 
