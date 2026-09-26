@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/opencharly/sdk/loaderkit"
+	"github.com/opencharly/sdk/vmshared"
 	"github.com/opencharly/spec/spec"
 )
 
@@ -132,5 +133,38 @@ func TestBaseDiskPath(t *testing.T) {
 	localDir, _ := vmDiskDir("check-omarchy-eval-base-inst")
 	if got2 != filepath.Join(localDir, "disk.qcow2") {
 		t.Fatalf("baseDiskPath(local) = %q, want the unchanged local path", got2)
+	}
+}
+
+// TestVmBuildDiskDir_LeafSymmetry is the RCA-F regression: `vm build` must key the
+// disk dir by the LEAF entity (entityLeaf(boxName)), the SAME convention every
+// READ path uses (baseDiskPath/BuildClone/vm_diagnose). Pre-fix `vm build` wrote
+// VmDiskDir(boxName) — the QUALIFIED name for a namespaced bed — while `vm create`
+// read `vmDiskDir(entityLeaf(entity))`, so a namespaced VM bed built its disk at
+// `image/<ns.bed>/` and then failed to create with
+// `disk.qcow2 not found at image/<leaf>/disk.qcow2`. This pins the write path to
+// the read path.
+func TestVmBuildDiskDir_LeafSymmetry(t *testing.T) {
+	const qualified = "omarchy.check-charly-omarchy-vm"
+
+	// The write-side key (what resolveVmBuild now uses).
+	writeDir, err := vmshared.VmDiskDir(entityLeaf(qualified))
+	if err != nil {
+		t.Fatalf("VmDiskDir(leaf): %v", err)
+	}
+	// The read-side path (what baseDiskPath / vm create use).
+	readPath, err := baseDiskPath(qualified)
+	if err != nil {
+		t.Fatalf("baseDiskPath: %v", err)
+	}
+	readDir := filepath.Dir(readPath)
+
+	if writeDir != readDir {
+		t.Fatalf("vm-build disk dir %q != vm-create read dir %q — write/read key mismatch (RCA-F)", writeDir, readDir)
+	}
+	// Pre-fix behavior, preserved as the negative case: keying by the QUALIFIED
+	// name diverges from the read path.
+	if qualifiedDir, _ := vmshared.VmDiskDir(qualified); qualifiedDir == readDir {
+		t.Fatal("test assumption broken: VmDiskDir(qualified) now equals the leaf read dir — re-verify the write path")
 	}
 }
