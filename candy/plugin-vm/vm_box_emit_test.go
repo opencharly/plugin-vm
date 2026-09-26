@@ -329,7 +329,15 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emitVmBox(containerDisk): %v", err)
 	}
-	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", srcRef).Run() })
+	t.Cleanup(func() {
+		_ = exec.Command("podman", "rmi", "-f", srcRef, "localhost/charly-vm-box-cd-layout:latest").Run()
+	})
+
+	// The emit also writes a STABLE :latest handle — a consumer that must NAME the
+	// box (a kind:kubevirt containerDisk.image) cannot know the wall-clock CalVer.
+	if err := exec.Command("podman", "image", "exists", "localhost/charly-vm-box-cd-layout:latest").Run(); err != nil {
+		t.Errorf("the emitted box has no stable :latest handle: %v", err)
+	}
 
 	// The metadata contract must ride the same image (R8: emitted artifact).
 	if _, err := deploykit.VmCapabilitiesFromLabels("podman", srcRef); err != nil {

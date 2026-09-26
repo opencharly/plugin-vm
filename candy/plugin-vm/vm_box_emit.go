@@ -98,6 +98,17 @@ func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath string) (string, 
 	if err := deploykit.EmitVmBoxAt(engine, ref, meta, diskPath, deploykit.ContainerDiskPath); err != nil {
 		return "", fmt.Errorf("emitting VM box %s: %w", ref, err)
 	}
+	// A STABLE `:latest` handle alongside the CalVer tag: the CalVer is
+	// wall-clock and unknowable to a consumer that must NAME the box statically (a
+	// kind:kubevirt containerDisk.image, or any authored ref). With both tags on
+	// the one image, a consumer names `localhost/charly-<vm>:latest` and a registry
+	// push carries both.
+	stable := fmt.Sprintf("localhost/charly-%s:latest", vmName)
+	if stable != ref {
+		if err := engineCmd(container.EngineBinary(engine), "tag", ref, stable); err != nil {
+			return "", fmt.Errorf("tagging the stable box ref %s: %w", stable, err)
+		}
+	}
 	return ref, nil
 }
 
