@@ -107,7 +107,16 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// collide); a direct create regenerates the entity's base seed in place (unchanged).
 	seedISOAbs := ""
 	if perDomain {
+		// A container_disk is cloud_image-like: the disk is prebuilt and charly seeds it
+		// through cloud-init, so it needs the SAME per-domain seed (the domain's ssh key +
+		// fresh instance-id). Omitting it here left the domain with NO cloud-init datasource
+		// — no key injection — and the guest was never reachable. Caught by the
+		// check-cua-container-disk-vm bed. The gate mirrors RegenerateSeedISO's own
+		// (CloudInit OR SSH — an ssh-only VM still needs the seed that carries its key).
 		if spec.Source.Kind == "cloud_image" && spec.CloudInit != nil {
+			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
+		}
+		if spec.Source.Kind == "container_disk" && (spec.CloudInit != nil || spec.SSH != nil) {
 			seedISOAbs = filepath.Join(vmStateDir, "seed.iso")
 		}
 		// A clone source needs its per-domain seed for the SAME reason: fresh
@@ -436,7 +445,10 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 // the clone is POST-INSTALL, so it needs the per-domain key injection but never the
 // installer answers (the re-pack is skipped separately).
 func needsPerDomainSeed(spec *VmSpec, isGoldenClone bool) bool {
-	return spec.Source.Kind == "cloud_image" || spec.Source.Kind == "clone" || isGoldenClone
+	// container_disk is cloud_image-like: cloud-init seeds the prebuilt disk, so it needs
+	// the per-domain seed (the domain's ssh key + fresh instance-id) exactly as cloud_image
+	// does. Omitting it left the deploy's domain with no cloud-init datasource.
+	return spec.Source.Kind == "cloud_image" || spec.Source.Kind == "container_disk" || spec.Source.Kind == "clone" || isGoldenClone
 }
 
 // shouldRepackIsoAnswers reports whether the per-domain iso answers volume must be
