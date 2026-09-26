@@ -105,12 +105,9 @@ func buildLayer(t *testing.T, gzipped bool, entries map[string][]byte) *bytes.Re
 	t.Helper()
 	var buf bytes.Buffer
 	var w *gzip.Writer
-	dst := &buf
 	if gzipped {
 		w = gzip.NewWriter(&buf)
-		dst = nil
 	}
-	_ = dst
 	var tw *tar.Writer
 	if gzipped {
 		tw = tar.NewWriter(w)
@@ -272,6 +269,30 @@ func TestBuildContainerDiskLive(t *testing.T) {
 	// The seed ISO is the cloud_image-equivalent artifact.
 	if _, err := os.Stat(res.SeedIsoPath); err != nil {
 		t.Errorf("seed ISO missing at %s: %v", res.SeedIsoPath, err)
+	}
+}
+
+// The cache marker identity must be STABLE across a re-pull of an unchanged artifact (the
+// cache-hit contract), and DISTINCT when the artifact changes. The previous code recorded a
+// different value than the hit test compared for a plain manifest, so a re-pull never hit.
+func TestContainerDiskCacheIdentity_StableAndDistinct(t *testing.T) {
+	// An index: the resolved platform digest IS the identity (the ref is irrelevant).
+	if got := containerDiskCacheIdentity("sha256:amd64", []byte(`{"any":"bytes"}`)); got != "sha256:amd64" {
+		t.Errorf("index identity = %q, want the platform digest sha256:amd64", got)
+	}
+	// A plain manifest: identity is the raw-bytes hash — deterministic across calls.
+	plain := []byte(manifestFixture)
+	a := containerDiskCacheIdentity("", plain)
+	b := containerDiskCacheIdentity("", plain)
+	if a == "" || a != b {
+		t.Errorf("plain identity must be a stable non-empty hash: %q vs %q", a, b)
+	}
+	if !strings.HasPrefix(a, "sha256:") {
+		t.Errorf("plain identity %q must be sha256:<hex>", a)
+	}
+	// A CHANGED plain manifest yields a DIFFERENT identity (a changed artifact must miss).
+	if c := containerDiskCacheIdentity("", append(append([]byte{}, plain...), ' ')); c == a {
+		t.Error("a changed manifest must produce a different identity (else a stale disk would be reused)")
 	}
 }
 

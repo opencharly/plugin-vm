@@ -36,7 +36,7 @@ import (
 
 // containerDiskManifest is the subset of an OCI image manifest this engine reads: the
 // config and the ordered layer list. A multi-arch ref is an INDEX, whose manifests each
-// carry a platform — handled by ContainerDiskManifest.
+// carry a platform — handled by resolveContainerDiskManifest.
 type containerDiskManifest struct {
 	MediaType string `json:"mediaType"`
 	Config    struct {
@@ -58,11 +58,11 @@ type containerDiskManifest struct {
 	} `json:"manifests"`
 }
 
-// ContainerDiskManifest resolves the PLATFORM image manifest for ref: if the ref is a
-// multi-arch index, the amd64/linux member is selected (matching the host this build
-// runs on); a plain manifest is returned as-is. `skopeo inspect --raw` does the registry
-// round-trip. Exported for the unit gate (the index→manifest selection is the one piece
-// of real logic that does not need a registry to exercise).
+// resolveContainerDiskManifest resolves the PLATFORM image manifest from raw manifest
+// JSON: if it is a multi-arch index, the amd64/linux member is selected (matching the
+// host this build runs on); a plain manifest yields an empty digest. Pure — it takes the
+// bytes `skopeo inspect --raw` already fetched, so the index→manifest selection is the
+// one piece of real logic the in-package unit gate can exercise with no registry.
 func resolveContainerDiskManifest(rawManifestJSON []byte) (string, string, error) {
 	var m containerDiskManifest
 	if err := json.Unmarshal(rawManifestJSON, &m); err != nil {
@@ -113,7 +113,7 @@ func isGzipLayer(mediaType string) bool {
 // it is absent — a missing disk is the one failure that would otherwise surface much
 // later, as a VM that will not boot.
 func extractDiskFromLayerTar(r io.Reader, gzipped bool, want, destPath string) error {
-	var src io.Reader = r
+	src := r
 	if gzipped {
 		gz, err := gzip.NewReader(r)
 		if err != nil {
@@ -185,6 +185,19 @@ func containerDiskCacheDir(src VmSource) (string, error) {
 	return filepath.Join(root, strings.NewReplacer(":", "-", "/", "-").Replace(key)), nil
 }
 
+// containerDiskCacheIdentity is the artifact identity recorded in the cache marker and
+// recomputed for the hit test. A resolved platform digest IS the identity; a PLAIN manifest
+// (platformDigest == "") has no self-digest, so the raw manifest bytes are hashed. Pure, so
+// the hit/miss contract is unit-testable with no registry: a re-pull of an unchanged
+// artifact computes the same identity and is a HIT.
+func containerDiskCacheIdentity(platformDigest string, rawManifestJSON []byte) string {
+	if platformDigest != "" {
+		return platformDigest
+	}
+	sum := sha256.Sum256(rawManifestJSON)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // resolveLayoutBlob returns the on-disk path of the blob for `digest` in a layout directory
 // produced by `skopeo copy … dir:<dir>`. The `dir:` transport writes blobs named by the BARE
 // hex digest (measured on skopeo 1.14: sha256:07b912… → ./07b912…), whereas an OCI image
@@ -237,8 +250,8 @@ var skopeoRawManifest = func(image string) ([]byte, error) {
 	return out, nil
 }
 
-// skopeoCopyLayer copies one image (by digest ref) into a dir: OCI layout, from which
-// the layer blob is read. Returns the layout directory to read the digest's blob from.
+// skopeoCopyToDir copies one image into a `dir:` transport layout, from which the layer
+// blob is read (see resolveLayoutBlob for the blob-name forms).
 func skopeoCopyToDir(image, dir string) error {
 	cmd := exec.Command("skopeo", "copy", "--override-os", "linux", "--override-arch", "amd64",
 		"docker://"+image, "dir:"+dir)
@@ -367,12 +380,16 @@ func pullContainerDisk(src VmSource, cacheDir, cachedDisk, digestMarker string, 
 	if err != nil {
 		return err
 	}
-	// Cache hit: the recorded platform-manifest digest matches and the disk is present.
+	// The artifact IDENTITY for the cache marker. An index resolves to a platform manifest
+	// (its digest identifies the amd64 image); a PLAIN manifest carries no self-digest, so
+	// hash the raw manifest bytes. Either way the value is derived from what we already
+	// fetched, so the hit test and the marker write compute the SAME identity — which the
+	// previous code did not (it wrote the layer digest but compared the ref).
+	identity := containerDiskCacheIdentity(platformDigest, raw)
+	// Cache hit: the recorded identity matches and the disk is present.
 	if !force && fileExists(cachedDisk) {
 		if recorded, rerr := os.ReadFile(digestMarker); rerr == nil {
-			rec := strings.TrimSpace(string(recorded))
-			// A plain manifest has an empty platformDigest; fall back to the ref digest.
-			if rec != "" && (rec == platformDigest || (platformDigest == "" && strings.Contains(src.Image, rec))) {
+			if strings.TrimSpace(string(recorded)) == identity {
 				return nil
 			}
 		}
@@ -432,11 +449,8 @@ func pullContainerDisk(src VmSource, cacheDir, cachedDisk, digestMarker string, 
 	if err := os.Rename(tmpDisk, cachedDisk); err != nil {
 		return fmt.Errorf("promoting extracted disk: %w", err)
 	}
-	recorded := platformDigest
-	if recorded == "" {
-		recorded = layerDigest
-	}
-	if err := os.WriteFile(digestMarker, []byte(recorded+"\n"), 0o644); err != nil {
+	// Record the SAME identity the hit test recomputes (see the top of this function).
+	if err := os.WriteFile(digestMarker, []byte(identity+"\n"), 0o644); err != nil {
 		return fmt.Errorf("recording manifest digest: %w", err)
 	}
 	return nil
