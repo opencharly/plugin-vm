@@ -147,10 +147,11 @@ func TestBaseDiskPath(t *testing.T) {
 func TestVmBuildDiskDir_LeafSymmetry(t *testing.T) {
 	const qualified = "omarchy.check-charly-omarchy-vm"
 
-	// The write-side key (what resolveVmBuild now uses).
-	writeDir, err := vmshared.VmDiskDir(entityLeaf(qualified))
+	// The write-side dir name — the SAME helper resolveVmBuild calls (NOT the literal
+	// expression), so reverting vmBuildDiskDirName to the qualified name fails this test.
+	writeDir, err := vmshared.VmDiskDir(vmBuildDiskDirName(qualified))
 	if err != nil {
-		t.Fatalf("VmDiskDir(leaf): %v", err)
+		t.Fatalf("VmDiskDir(vmBuildDiskDirName): %v", err)
 	}
 	// The read-side path (what baseDiskPath / vm create use).
 	readPath, err := baseDiskPath(qualified)
@@ -162,8 +163,8 @@ func TestVmBuildDiskDir_LeafSymmetry(t *testing.T) {
 	if writeDir != readDir {
 		t.Fatalf("vm-build disk dir %q != vm-create read dir %q — write/read key mismatch (RCA-F)", writeDir, readDir)
 	}
-	// Pre-fix behavior, preserved as the negative case: keying by the QUALIFIED
-	// name diverges from the read path.
+	// Regression guard: the pre-fix keying (the QUALIFIED name) diverges from the read
+	// path — pinned so a revert is caught.
 	if qualifiedDir, _ := vmshared.VmDiskDir(qualified); qualifiedDir == readDir {
 		t.Fatal("test assumption broken: VmDiskDir(qualified) now equals the leaf read dir — re-verify the write path")
 	}

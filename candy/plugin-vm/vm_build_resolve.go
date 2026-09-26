@@ -75,6 +75,17 @@ func entityLeaf(name string) string {
 	return name
 }
 
+// vmBuildDiskDirName is the directory name `vm build` keys its disk/seed output
+// under. It MUST be the LEAF entity (entityLeaf(boxName)): every READ path
+// (baseDiskPath, BuildClone, vm_diagnose) uses vmDiskDir(entityLeaf(entity)), so
+// keying the WRITE by the qualified name would build `image/<ns.bed>/` and then
+// fail `vm create` with `disk.qcow2 not found at image/<leaf>/disk.qcow2` (RCA-F).
+// Extracted as a named helper so the write/read symmetry is unit-testable
+// directly (not inferred from the expression).
+func vmBuildDiskDirName(boxName string) string {
+	return entityLeaf(boxName)
+}
+
 // resolveVmBuildViaDeployFrom hops a from: name:tag DRIVE target through the deploy map:
 // boxName names a DEPLOY (the base bed) whose from: names the base kind:vm entity — resolve
 // that entity. Used ONLY when the drive carries from_snapshot (the clone drive); the plain
@@ -340,7 +351,7 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 		engine = kit.EngineBinary(rt.RunEngine)
 	}
 
-	diskDir, err := vmshared.VmDiskDir(entityLeaf(boxName))
+	diskDir, err := vmshared.VmDiskDir(vmBuildDiskDirName(boxName))
 	if err != nil {
 		return spec.VmBuildReply{}, err
 	}
