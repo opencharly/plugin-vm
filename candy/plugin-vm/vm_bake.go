@@ -23,10 +23,12 @@ import (
 
 // VmBakeCmd implements charly vm bake <name> [--candy a,b].
 type VmBakeCmd struct {
-	Box          string `arg:"" help:"VM name (the distro-bearing kind:vm entity whose golden snapshot bakes)"`
-	Candy        string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly deploy add vm:<name>)"`
-	Console      bool   `name:"console" help:"Enable console output for debugging the boot"`
-	FromSnapshot string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
+	Box             string `arg:"" help:"VM name (the distro-bearing kind:vm entity whose golden snapshot bakes)"`
+	Candy           string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly deploy add vm:<name>)"`
+	Console         bool   `name:"console" help:"Enable console output for debugging the boot"`
+	FromSnapshot    string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
+	PublishTo       string `name:"publish-to" help:"After the freeze, also emit the disk as a bootable containerDisk OCI image (+gzip at /disk/disk.img) and push it to this registry ref (host/repo:tag)"`
+	PublishInsecure bool   `name:"publish-insecure" help:"Allow a plain-HTTP registry for --publish-to"`
 }
 
 // Run executes charly vm bake.
@@ -119,6 +121,19 @@ func (c *VmBakeCmd) Run() error {
 		return fmt.Errorf("vm bake: emitting box: %w", err)
 	}
 	fmt.Printf("baked VM box %q (snapshot %q, disk %s)\n", ref, entry.Name, entry.DiskPath)
+
+	// Phase 5b — optionally publish the frozen disk as a bootable containerDisk
+	// (the produce half: a +gzip OCI layer at /disk/disk.img the container_disk
+	// source or a KubeVirt cluster boots). Fails the bake on a real emit error —
+	// the operator asked for the artifact.
+	if c.PublishTo != "" {
+		fmt.Fprintf(os.Stderr, "bake %q: phase 5b — publishing the containerDisk\n", c.Box)
+		reply, perr := publishContainerDisk(c.Box, vmSpec, entry.DiskPath, c.PublishTo, "", "", c.PublishInsecure)
+		if perr != nil {
+			return fmt.Errorf("vm bake: publishing containerDisk: %w", perr)
+		}
+		fmt.Printf("published containerDisk %s@%s\n", reply.Ref, reply.Digest)
+	}
 
 	// Cleanup — stop the domain (the box is the artifact; the domain was the
 	// bake vessel).
