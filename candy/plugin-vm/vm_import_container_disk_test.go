@@ -100,3 +100,34 @@ func TestImportContainerDisk_Live(t *testing.T) {
 		t.Fatalf("identity marker not written: %v", err)
 	}
 }
+
+// TestContainerDiskCacheDir_TagVsDigest pins the EXACT keying rule the import shares with
+// the build path: a DIGEST-pinned ref keys the cache by the digest (dir `sha256-<hex>`,
+// stable across consumers); a TAG ref keys by the sha256 of the ref string. The same
+// artifact named by tag and by digest therefore gets two entries — the shared engine's
+// intended behaviour, not a silent collapse.
+func TestContainerDiskCacheDir_TagVsDigest(t *testing.T) {
+	root := t.TempDir()
+	tagDir, err := containerDiskCacheDir(containerDiskImportSource("reg/x:1", "", root))
+	if err != nil {
+		t.Fatalf("containerDiskCacheDir(tag): %v", err)
+	}
+	digDir, err := containerDiskCacheDir(containerDiskImportSource("reg/x@sha256:deadbeef", "", root))
+	if err != nil {
+		t.Fatalf("containerDiskCacheDir(digest): %v", err)
+	}
+	if filepath.Base(digDir) != "sha256-deadbeef" {
+		t.Errorf("digest-pinned cache dir base = %q, want sha256-deadbeef", filepath.Base(digDir))
+	}
+	if filepath.Base(tagDir) == filepath.Base(digDir) {
+		t.Errorf("tag and digest refs share the cache dir %q — keying must differ", tagDir)
+	}
+	// The digest key is STABLE: the same digest ref always resolves the same dir.
+	again, err := containerDiskCacheDir(containerDiskImportSource("reg/x@sha256:deadbeef", "", root))
+	if err != nil {
+		t.Fatalf("containerDiskCacheDir(digest again): %v", err)
+	}
+	if again != digDir {
+		t.Errorf("digest-pinned cache dir is not stable: %q != %q", again, digDir)
+	}
+}
