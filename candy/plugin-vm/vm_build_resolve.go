@@ -392,8 +392,14 @@ func resolveVmBuild(ctx context.Context, ex *sdk.Executor, req spec.VmBuildReque
 
 	var existingState *spec.VmDeployState
 	if dc, derr := loaderkit.LoadHostDeployConfigViaExecutor(ctx, ex); derr == nil && dc != nil {
-		if e, ok := dc.LookupKey("vm:" + boxName); ok {
-			existingState = e.VmState
+		// The per-host state is keyed by the deploy IDENTITY (the #301 cutover), with the
+		// VM ENTITY carried in the entry's `vm:` cross-ref — so a build addressed by the
+		// ENTITY resolves its deploy-keyed entry through that cross-ref.
+		for _, e := range dc.Deploy {
+			if e.From == boxName {
+				existingState = e.VmState
+				break
+			}
 		}
 	}
 

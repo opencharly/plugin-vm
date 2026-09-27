@@ -647,11 +647,16 @@ func (c *VmDestroyCmd) Run() error {
 	// bed cleanup tears down via `charly vm destroy`). --keep-deploy preserves it for
 	// a deliberate re-create, mirroring `charly remove --keep-deploy` for pods.
 	if !c.KeepDeploy {
-		// Key the removed entry by the DOMAIN IDENTITY (vm:<domain>) — that is where the port +
-		// instance-id ledger for THIS domain lives (runVmSpecCreate persists vm:<domain>). Removing
-		// vm:<entity> instead would, via deploykit.RemoveVmDeployEntry's From-scan, over-match
-		// every sibling bed sharing the entity — the collision this cutover eliminates.
-		deployName := "vm:" + deployKey(domainOr(c.Box, c.Domain), c.Instance)
+		// Key the removed entry by the DEPLOY IDENTITY when --domain names it (that is where the
+		// port + instance-id ledger for THIS domain lives — runVmSpecCreate persists the identity
+		// key); a direct `charly vm destroy <entity>` (no --domain) uses the `vm:<entity>`
+		// ADDRESSING form, whose From-scan resolves the deploy-keyed entry via its `vm:` cross-ref.
+		// Both avoid deploykit.RemoveVmDeployEntry's From-scan over-matching sibling beds that
+		// share the entity — the collision this cutover eliminates.
+		deployName := deployKey(domainOr(c.Box, c.Domain), c.Instance)
+		if c.Domain == "" {
+			deployName = "vm:" + deployName
+		}
 		if err := hostConfigPersist(deployName, "", nil, true); err != nil {
 			fmt.Fprintf(os.Stderr, "note: charly.yml entry cleanup (%s): %v\n", deployName, err)
 		}

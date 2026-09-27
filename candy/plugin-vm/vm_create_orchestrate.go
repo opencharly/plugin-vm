@@ -247,8 +247,9 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	// ports. The auto-allocation must be stable across the vm-create → deploy-add
 	// sequence; without persisting here deploy-add re-resolves, allocates DIFFERENT
 	// ports, and the VM is unreachable / the kubeconfig rewrite maps the wrong port.
-	// The ledger key is vm:<domainID> (entity carried as the `vm:` cross-ref), so
-	// resolveVmSshPort/resolveVmPortForwards(spec, domainID) read back the SAME entry.
+	// The ledger key is the DEPLOY IDENTITY (domainID; the VM entity is carried as the
+	// `vm:` cross-ref), so resolveVmSshPort/resolveVmPortForwards(spec, domainID) read
+	// back the SAME entry.
 	if (spec.SSH != nil && spec.SSH.PortAuto) || len(allocatedForwards) > 0 {
 		st := &VmDeployState{}
 		if vmState != nil {
@@ -260,7 +261,7 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 		if len(allocatedForwards) > 0 {
 			st.PortForwards = allocatedForwards
 		}
-		if err := hostConfigPersist("vm:"+domainID, entity, st, false); err != nil {
+		if err := hostConfigPersist(domainID, entity, st, false); err != nil {
 			return fmt.Errorf("persisting auto-allocated ports: %w", err)
 		}
 	}
