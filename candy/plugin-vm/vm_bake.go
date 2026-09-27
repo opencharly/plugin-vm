@@ -73,15 +73,14 @@ func (c *VmBakeCmd) Run() error {
 		return fmt.Errorf("vm bake: booting %q: %w", c.Box, err)
 	}
 
-	// Phase 2.5 — ensure qemu-guest-agent is ENABLED in the guest and reachable: the
-	// in-guest layer application (phase 3) and any guest-consistent operation need it.
-	// SSH in via the bake domain's managed alias (NOT the entity's — the bake domain is
-	// its own per-domain identity).
-	if err := enableGuestAgent(bakeDomain, 10*time.Minute); err != nil {
-		return fmt.Errorf("vm bake: enabling guest agent: %w", err)
-	}
-	if err := waitForAgentConnect(bakeDomain, 2*time.Minute); err != nil {
-		return fmt.Errorf("vm bake: guest agent not reachable: %w", err)
+	// Phase 2.5 — BEST-EFFORT: enable qemu-guest-agent in the guest (the deploy path's
+	// consistent operations use it). It is NOT load-bearing for the bake — the bake does
+	// not freeze a snapshot — and a guest whose desktop user has no NOPASSWD sudo (the Cua
+	// Fleet image) cannot enable it over ssh. A failure is reported, never fatal.
+	if err := enableGuestAgent(bakeDomain, 2*time.Minute); err != nil {
+		fmt.Fprintf(os.Stderr, "vm bake: note: qemu-guest-agent not enabled (%v) — the bake does not require it\n", err)
+	} else if err := waitForAgentConnect(bakeDomain, 2*time.Minute); err != nil {
+		fmt.Fprintf(os.Stderr, "vm bake: note: qemu-guest-agent not reachable (%v) — the bake does not require it\n", err)
 	}
 
 	// Phase 3 — the in-guest layer application IS the vm deploy's shared-IR
@@ -127,7 +126,7 @@ func (c *VmBakeCmd) Run() error {
 
 	// Cleanup — destroy the bake domain + its overlay (the box is the artifact). Keep the
 	// entity's charly.yml entry: the bake domain is a throwaway vessel, not a deploy.
-	if err := (&VmDestroyCmd{Box: c.Box, Domain: bakeDomain, KeepDeploy: true}).Run(); err != nil {
+	if err := (&VmDestroyCmd{Box: c.Box, Domain: bakeDomain, Disk: true, KeepDeploy: true}).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "vm bake: note: destroying the bake domain: %v\n", err)
 	}
 	return nil
