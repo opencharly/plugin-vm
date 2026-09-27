@@ -208,28 +208,26 @@ func TestPushVmBox_Argv(t *testing.T) {
 	}
 
 	wantPush := []string{"podman", "push", "reg.example/charly-vm:1"}
+	wantTag := []string{"podman", "tag", "localhost/charly-vm:1", "reg.example/charly-vm:1"}
+	wantStableTag := []string{"podman", "tag", "reg.example/charly-vm:1", "reg.example/charly-vm:latest"}
+	wantStablePush := []string{"podman", "push", "reg.example/charly-vm:latest"}
 
+	// src != dst: tag + push, THEN the stable `:latest` twin at the destination
+	// (tag + push) — so a consumer that names the box statically can pull it.
 	if err := pushVmBox("podman", "localhost/charly-vm:1", "reg.example/charly-vm:1"); err != nil {
 		t.Fatalf("pushVmBox: %v", err)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("want tag+push (2 engine calls), got %d: %v", len(calls), calls)
-	}
-	wantTag := []string{"podman", "tag", "localhost/charly-vm:1", "reg.example/charly-vm:1"}
-	if !reflect.DeepEqual(calls[0], wantTag) {
-		t.Errorf("tag argv = %v, want %v", calls[0], wantTag)
-	}
-	if !reflect.DeepEqual(calls[1], wantPush) {
-		t.Errorf("push argv = %v, want %v", calls[1], wantPush)
+	if want := [][]string{wantTag, wantPush, wantStableTag, wantStablePush}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("pushVmBox engine calls = %v, want %v", calls, want)
 	}
 
-	// Same ref: the tag is skipped, push only.
+	// Same ref: the src tag is skipped; the dst push + the stable twin remain.
 	calls = nil
 	if err := pushVmBox("podman", "reg.example/charly-vm:1", "reg.example/charly-vm:1"); err != nil {
 		t.Fatalf("pushVmBox (same ref): %v", err)
 	}
-	if len(calls) != 1 || !reflect.DeepEqual(calls[0], wantPush) {
-		t.Errorf("same-ref push calls = %v, want just %v", calls, wantPush)
+	if want := [][]string{wantPush, wantStableTag, wantStablePush}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("same-ref push calls = %v, want %v", calls, want)
 	}
 
 	// Empty destination is rejected before any engine call.

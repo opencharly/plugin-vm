@@ -108,7 +108,8 @@ func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath stri
 	// unknowable to a consumer that must NAME the box statically — a kind:kubevirt
 	// `containerDisk.image`, or any authored ref. With both tags on the one image, a
 	// consumer names `localhost/charly-<vm>:latest` and a registry push carries both.
-	stable := fmt.Sprintf("localhost/charly-%s:latest", vmName)
+	// ONE derivation (latestRef) shared with the --push path, so the two cannot diverge.
+	stable := latestRef(ref)
 	if stable != ref {
 		if err := engineCmd(container.EngineBinary(engine), "tag", ref, stable); err != nil {
 			return "", fmt.Errorf("tagging the stable box ref %s: %w", stable, err)
