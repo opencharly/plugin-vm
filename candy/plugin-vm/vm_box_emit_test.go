@@ -429,3 +429,22 @@ func TestEmitVmBox_StableTagLive(t *testing.T) {
 		t.Fatalf("no stable :latest handle after emit: %v", err)
 	}
 }
+
+// TestLatestRef pins the destination-side stable-handle computation: the `--push`
+// path publishes BOTH the CalVer ref and a `:latest` handle at the registry, so a
+// consumer that must NAME the box statically (a kind:kubevirt containerDisk.image)
+// resolves it. A registry host:port is preserved; a digest-pinned ref is unchanged.
+func TestLatestRef(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"registry.example.com/charly-box:2026.270.0000", "registry.example.com/charly-box:latest"},
+		{"registry.example.com:5000/charly-box:v1", "registry.example.com:5000/charly-box:latest"},
+		{"registry.example.com/charly-box", "registry.example.com/charly-box:latest"},
+		{"localhost/charly-vm:latest", "localhost/charly-vm:latest"},
+		{"registry.example.com/charly-box@sha256:abc", "registry.example.com/charly-box@sha256:abc"},
+	}
+	for _, c := range cases {
+		if got := latestRef(c.in); got != c.want {
+			t.Errorf("latestRef(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
