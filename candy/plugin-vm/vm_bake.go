@@ -44,91 +44,113 @@ func (c *VmBakeCmd) Run() error {
 	if vmSpec == nil {
 		return noVmEntityErr(c.Box)
 	}
-	// R5 retirement (Cutover A addendum Phase 3): the entity clone arm is gone; the bake
-	// base is the entity's OWN golden clone, the snapshot named by --from-snapshot.
+	// The bake base is the entity's OWN golden: it marks the frozen base the bake boots
+	// onto. It MUST exist — a known-good base is the whole point of requiring it.
 	if err := bakeRequiresSnapshot(c.FromSnapshot); err != nil {
 		return err
 	}
-	applyCloneDriveSource(vmSpec, c.Box, c.FromSnapshot)
+	if _, err := LookupSnapshot(c.Box, c.FromSnapshot); err != nil {
+		return err
+	}
 
 	rt, err := kit.ResolveRuntime()
 	if err != nil {
 		return err
 	}
 	engine := kit.EngineBinary(rt.RunEngine)
-	vmStateDir, err := vmsharedStateDir(c.Box)
-	if err != nil {
-		return err
-	}
 
-	// Phase 1 — materialize the base (the clone overlay on the parent snapshot).
-	fmt.Fprintf(os.Stderr, "bake %q: phase 1 — materializing the base (clone)\n", c.Box)
-	if err := BuildClone(c.Box, vmSpec, "", vmStateDir); err != nil {
-		return fmt.Errorf("vm bake: materializing base: %w", err)
-	}
+	// The bake boots a PER-DOMAIN DOMAIN: its disk is a per-domain overlay onto the
+	// entity's frozen base, so the base — and the golden snapshot that backs onto it —
+	// stay immutable. This REPLACES the former BuildClone, which materialized the clone
+	// INTO the entity's own disk (which is the golden's backing file) and produced a
+	// circular qcow2 backing chain (plugin-vm#54: `qemu-img: Backing file … creates an
+	// infinite loop`).
+	bakeDomain := c.Box + "-bake"
 
-	// Phase 2 — boot the domain via the standard create path.
-	fmt.Fprintf(os.Stderr, "bake %q: phase 2 — booting the domain\n", c.Box)
-	createCmd := VmCreateCmd{Box: c.Box}
-	if err := createCmd.Run(); err != nil {
+	// Phase 1/2 — boot the bake domain (a per-domain overlay onto the frozen base).
+	fmt.Fprintf(os.Stderr, "bake %q: phase 1/2 — booting the bake domain (per-domain overlay onto the frozen base)\n", c.Box)
+	if err := (&VmCreateCmd{Box: c.Box, Domain: bakeDomain}).Run(); err != nil {
 		return fmt.Errorf("vm bake: booting %q: %w", c.Box, err)
+	}
+
+	// Phase 2.5 — ensure qemu-guest-agent is ENABLED in the guest and reachable: the
+	// in-guest layer application (phase 3) and any guest-consistent operation need it.
+	// SSH in via the bake domain's managed alias (NOT the entity's — the bake domain is
+	// its own per-domain identity).
+	if err := enableGuestAgent(bakeDomain, 10*time.Minute); err != nil {
+		return fmt.Errorf("vm bake: enabling guest agent: %w", err)
+	}
+	if err := waitForAgentConnect(bakeDomain, 2*time.Minute); err != nil {
+		return fmt.Errorf("vm bake: guest agent not reachable: %w", err)
 	}
 
 	// Phase 3 — the in-guest layer application IS the vm deploy's shared-IR
 	// walk (charly deploy add vm:<name> runs kit.WalkPlans over the guest SSH
-	// executor). Applied BEFORE the snapshot freeze so the baked box carries
-	// them. With --candy, print the exact command and return (the runner
-	// applies the layers, then re-runs WITHOUT --candy to freeze + emit).
+	// executor). With --candy, print the exact command and return (the runner
+	// applies the layers, then re-runs WITHOUT --candy to flatten + emit).
 	layers := splitCsv(c.Candy)
 	if len(layers) > 0 {
 		fmt.Fprintf(os.Stderr, "bake %q: phase 3 — apply the layer(s) in-guest with the shared IR walk:\n", c.Box)
-		fmt.Fprintf(os.Stderr, "  charly deploy add vm:%s %s\n", c.Box, strings.Join(layers, " "))
-		fmt.Fprintf(os.Stderr, "then re-run: charly vm bake %s (WITHOUT --candy) to freeze the baked state and emit the box\n", c.Box)
+		fmt.Fprintf(os.Stderr, "  charly deploy add vm:%s --domain %s %s\n", c.Box, bakeDomain, strings.Join(layers, " "))
+		fmt.Fprintf(os.Stderr, "then re-run: charly vm bake %s --from-snapshot %s (WITHOUT --candy) to flatten the baked state and emit the box\n", c.Box, c.FromSnapshot)
 		return nil
 	}
 
-	// Phase 2.5 — ensure qemu-guest-agent is ENABLED in the guest: the baked
-	// disk's guest may not auto-start the agent service, and the re-materialized
-	// clone disk wipes any prior in-guest enable. SSH in (the create path
-	// published the managed alias) and enable it, then let it connect.
-	// The bound mirrors the deploy path's WaitForSSH for a VM cold first boot
-	// (kit.WaitForSSH's default ~10-minute window) — not a magic value: the
-	// clone's first boot runs cloud-init provisioning before sshd listens.
-	if err := enableGuestAgent(c.Box, 10*time.Minute); err != nil {
-		return fmt.Errorf("vm bake: enabling guest agent: %w", err)
+	// Phase 4 — stop the bake domain so its overlay is a consistent file, then FLATTEN
+	// it into a standalone disk. The emitted box must carry the WHOLE baked disk; the
+	// former code emitted a snapshot OVERLAY whose backing would be absent from the
+	// image.
+	fmt.Fprintf(os.Stderr, "bake %q: phase 4 — stopping the bake domain + flattening the baked disk\n", c.Box)
+	if err := (&VmStopCmd{Box: c.Box, Domain: bakeDomain, Force: true}).Run(); err != nil {
+		return fmt.Errorf("vm bake: stopping the bake domain: %w", err)
 	}
-
-	// Phase 3.5 — wait for the guest agent to CONNECT before the strict
-	// snapshot freeze (createConsistentSnapshot REQUIRES qemu-guest-agent
-	// reachable). Once sshd is up and the service is enabled (phase 2.5), the
-	// agent connects within seconds — a short bound suffices; this is not a
-	// boot wait, that is phase 2.5's job.
-	if err := waitForAgentConnect(c.Box, 2*time.Minute); err != nil {
-		return fmt.Errorf("vm bake: guest agent not reachable before freeze: %w", err)
-	}
-
-	// Phase 4 — freeze the baked state as a consistent snapshot.
-	fmt.Fprintf(os.Stderr, "bake %q: phase 4 — freezing the baked state (snapshot)\n", c.Box)
-	entry, err := createConsistentSnapshot(consistentCreateOpts(c.Box, "baked", "external", "layered bake of "+c.Box))
+	bakeDisk, err := bakeWorkingDisk(bakeDomain)
 	if err != nil {
-		return fmt.Errorf("vm bake: snapshot freeze: %w", err)
+		return err
+	}
+	flatDisk := filepath.Join(filepath.Dir(bakeDisk), "baked-flat.qcow2")
+	_ = os.Remove(flatDisk)
+	if err := qemuImgConvert(bakeDisk, flatDisk); err != nil {
+		return fmt.Errorf("vm bake: flattening the baked disk: %w", err)
 	}
 
-	// Phase 5 — wrap the frozen disk into the box image. --container-disk emits
+	// Phase 5 — wrap the flattened disk into the box image. --container-disk emits
 	// the KubeVirt/Cua /disk/disk.img layout (boxInImagePath); an explicit
 	// --push then delivers the baked box to a registry — the produce half for a
 	// Cua Fleet / KubeVirt image (the in-guest candy bake IS the difference from
 	// `vm build`).
 	fmt.Fprintf(os.Stderr, "bake %q: phase 5 — emitting the VM box\n", c.Box)
+	entry := &SnapshotEntry{Name: "baked", DiskPath: flatDisk}
 	if err := runBakePhase5(engine, c.Box, vmSpec, entry, vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push}); err != nil {
 		return err
 	}
 
-	// Cleanup — stop the domain (the box is the artifact; the domain was the
-	// bake vessel).
-	stopCmd := VmStopCmd{Box: c.Box}
-	if err := stopCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "vm bake: note: stopping the bake domain: %v\n", err)
+	// Cleanup — destroy the bake domain + its overlay (the box is the artifact). Keep the
+	// entity's charly.yml entry: the bake domain is a throwaway vessel, not a deploy.
+	if err := (&VmDestroyCmd{Box: c.Box, Domain: bakeDomain, KeepDeploy: true}).Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "vm bake: note: destroying the bake domain: %v\n", err)
+	}
+	return nil
+}
+
+// bakeWorkingDisk is the bake domain's per-domain overlay — the writable working disk the
+// bake boots and flattens. Keyed by the DOMAIN (charly-<domain>), matching the create
+// path's per-domain state dir (runVmSpecCreate: filepath.Join(vmStateBase, "charly-"+domain)).
+func bakeWorkingDisk(bakeDomain string) (string, error) {
+	dir, err := vmsharedStateDir(bakeDomain)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "disk.qcow2"), nil
+}
+
+// qemuImgConvert flattens src into a standalone qcow2 at dst (no backing file), so an
+// emitted box carries the whole disk rather than an overlay whose backing is absent.
+func qemuImgConvert(src, dst string) error {
+	cmd := exec.Command("qemu-img", "convert", "-O", "qcow2", src, dst)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("qemu-img convert %s -> %s: %w", src, dst, err)
 	}
 	return nil
 }

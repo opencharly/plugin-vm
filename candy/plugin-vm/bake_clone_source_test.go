@@ -1,19 +1,37 @@
 package vm
 
 import (
+	"path/filepath"
 	"testing"
+
+	"github.com/opencharly/sdk/vmshared"
 )
 
-// TestBakeUsesTheDriveCloneWiring gates the bake base SEAM (Phase 3): the base
-// materializes as a clone of the entity's OWN golden at the named snapshot, via the SAME
-// extracted seam as the build drive (applyCloneDriveSource — R3, one wiring, two
-// consumers). The seam is the testable unit; the wiring (VmBakeCmd.Run calling it) is
-// thin and covered by the live bake path.
-func TestBakeUsesTheDriveCloneWiring(t *testing.T) {
-	vs := &VmSpec{}
-	applyCloneDriveSource(vs, "cachyos-vm", "golden")
-	if vs.Source.Kind != "clone" || vs.Source.FromVm != "cachyos-vm" || vs.Source.FromSnapshot != "golden" {
-		t.Errorf("bake source = kind=%q from_vm=%q from_snapshot=%q, want clone/cachyos-vm/golden",
-			vs.Source.Kind, vs.Source.FromVm, vs.Source.FromSnapshot)
+// TestBakeWorkingDisk gates the bake's WORKING-DISK resolution. The bake boots a
+// PER-DOMAIN overlay keyed by the bake domain (`<entity>-bake`), NOT the entity's own
+// disk: the former self-clone wrote the clone INTO the entity's disk, which is the backing
+// file of the entity's own golden snapshot, producing a circular qcow2 backing chain
+// (plugin-vm#54). This is the path the bake flattens and emits, so its shape is the
+// contract that keeps the bake off the golden's backing.
+func TestBakeWorkingDisk(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(vmshared.VmStateDirEnv, root)
+
+	bakeDomain := "cua-container-disk-vm" + "-bake"
+	got, err := bakeWorkingDisk(bakeDomain)
+	if err != nil {
+		t.Fatalf("bakeWorkingDisk: %v", err)
+	}
+	want := filepath.Join(root, "charly-cua-container-disk-vm-bake", "disk.qcow2")
+	if got != want {
+		t.Errorf("bakeWorkingDisk = %q, want %q", got, want)
+	}
+	// The working disk must NOT be the entity's own disk dir (the golden's backing).
+	entityDisk, err := vmshared.VmDiskDir("cua-container-disk-vm")
+	if err != nil {
+		t.Fatalf("VmDiskDir: %v", err)
+	}
+	if filepath.Dir(got) == entityDisk {
+		t.Errorf("bake working disk %q is the entity's own disk dir %q — the circular-chain defect", got, entityDisk)
 	}
 }
