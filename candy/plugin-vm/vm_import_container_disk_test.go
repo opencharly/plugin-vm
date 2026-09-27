@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,6 +120,13 @@ func TestContainerDiskCacheDir_TagVsDigest(t *testing.T) {
 	}
 	if filepath.Base(digDir) != "sha256-deadbeef" {
 		t.Errorf("digest-pinned cache dir base = %q, want sha256-deadbeef", filepath.Base(digDir))
+	}
+	// The TAG ref is keyed by the sha256 of the REF STRING (exact assertion — not merely
+	// "different from the digest dir").
+	sum := sha256.Sum256([]byte("reg/x:1"))
+	wantTag := hex.EncodeToString(sum[:])
+	if filepath.Base(tagDir) != wantTag {
+		t.Errorf("tag cache dir base = %q, want the ref hash %q", filepath.Base(tagDir), wantTag)
 	}
 	if filepath.Base(tagDir) == filepath.Base(digDir) {
 		t.Errorf("tag and digest refs share the cache dir %q — keying must differ", tagDir)

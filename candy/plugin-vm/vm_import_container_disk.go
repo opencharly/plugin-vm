@@ -13,18 +13,24 @@ import (
 // containerDisk contract: the disk lives in a layer, by default at /disk/disk.img).
 // charly's `container_disk` VM source (spec#171) pulls such an artifact while BUILDING a
 // `kind: vm` entity. This command is the standalone primitive that pull is built on: it
-// imports the artifact into the SHARED, content-addressed VM-image cache keyed by the
-// manifest digest — WITHOUT authoring a VM entity — so a later `charly vm build` of a
-// container_disk entity is a cache HIT (the pull is done once), and an operator can
-// pre-warm a large Fleet image in CI or before a bed run.
+// imports the artifact into the SHARED, content-addressed VM-image cache — WITHOUT
+// authoring a VM entity — so a later `charly vm build` of a `container_disk` entity that
+// names the SAME ref is a cache hit (the pull is done once), and an operator can pre-warm
+// a large Fleet image in CI or before a bed run.
+//
+// The cache key is the shared engine's (containerDiskCacheDir): a DIGEST-pinned ref
+// (`reg/x@sha256:…`) keys by the digest (`sha256-<hex>`), a TAG ref (`reg/x:1`) keys by
+// the sha256 of the ref string. A digest-pinned import therefore shares one entry with a
+// digest-pinned build; the same artifact named by tag and by digest gets two entries.
 //
 // It reuses the ONE pull engine (pullContainerDisk) the build drive already calls — no
 // second fetch path, no duplicated index→manifest resolution (R3).
 
 // VmImportContainerDiskCmd implements `charly vm import-container-disk <ref>`.
 type VmImportContainerDiskCmd struct {
-	// Image is the containerDisk OCI ref to import. Pin by digest for an immutable cache
-	// identity (a tag resolves through the manifest, but the digest is the stable key).
+	// Image is the containerDisk OCI ref to import. A DIGEST pin gives a stable cache
+	// identity shared across consumers; a tag keys the cache by the ref string (see the
+	// package comment).
 	Image string `arg:"" help:"containerDisk OCI ref to import (e.g. public.ecr.aws/k5j5w0x5/cua-omarchy-workspace@sha256:…)"`
 
 	// DiskPathInImage overrides the in-image disk path (default /disk/disk.img, the
