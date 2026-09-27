@@ -405,3 +405,27 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 		t.Errorf("the containerDisk payload must NOT carry the VM-box default /disk.qcow2; cp succeeded:\n%s", out)
 	}
 }
+
+// TestEmitVmBox_StableTagLive: the emit writes a stable :latest handle alongside the
+// wall-clock CalVer tag — a consumer that must NAME the box (a kind:kubevirt
+// containerDisk.image) cannot know the CalVer. Fails without the stable tag.
+func TestEmitVmBox_StableTagLive(t *testing.T) {
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skipf("podman not available on this host — skipping: %v", err)
+	}
+	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("writing fixture disk: %v", err)
+	}
+	s := emitFixtureSpec()
+	ref, err := emitVmBox("podman", "vm-box-stable-tag", s, diskPath, "")
+	if err != nil {
+		t.Fatalf("emitVmBox: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("podman", "rmi", "-f", ref, "localhost/charly-vm-box-stable-tag:latest").Run()
+	})
+	if err := exec.Command("podman", "image", "exists", "localhost/charly-vm-box-stable-tag:latest").Run(); err != nil {
+		t.Fatalf("no stable :latest handle after emit: %v", err)
+	}
+}
