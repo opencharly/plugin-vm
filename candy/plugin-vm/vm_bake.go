@@ -73,10 +73,7 @@ func (c *VmBakeCmd) Run() error {
 	// the entity's own disk (the golden's backing file) and produced a circular qcow2
 	// backing chain (plugin-vm#54: `qemu-img: Backing file … creates an infinite loop`).
 	fmt.Fprintf(os.Stderr, "bake %q: phase 1/2 — booting the bake domain %q (per-domain overlay onto the frozen base)\n", c.Box, bakeDomain)
-	// KeepDisk only when the caller supplied --domain: that domain's disk is the one a
-	// golden captured on it backs onto. The derived <entity>-bake path creates a fresh
-	// overlay as before.
-	if err := (&VmCreateCmd{Box: c.Box, Domain: bakeDomain, KeepDisk: c.Domain != ""}).Run(); err != nil {
+	if err := bakeCreateCmd(c.Box, c.Domain, bakeDomain).Run(); err != nil {
 		return fmt.Errorf("vm bake: booting %q: %w", c.Box, err)
 	}
 
@@ -152,6 +149,16 @@ func bakeDomainName(entity, explicit string) string {
 		return explicit
 	}
 	return entity + "-bake"
+}
+
+// bakeCreateCmd assembles the bake's phase-1/2 create. The DOMAIN is always set (it IS the
+// bake's identity); KeepDisk is set ONLY when the caller supplied an explicit --domain —
+// that domain's disk is the one a golden captured on it backs onto, so the create must be
+// non-destructive. The derived `<entity>-bake` path (no --domain) creates a fresh overlay
+// as before. Pure, so the KeepDisk wiring is unit-testable (a regression drops the golden's
+// backing on the deploy path).
+func bakeCreateCmd(box, explicitDomain, bakeDomain string) *VmCreateCmd {
+	return &VmCreateCmd{Box: box, Domain: bakeDomain, KeepDisk: explicitDomain != ""}
 }
 
 // bakeWorkingDisk is the bake domain's per-domain overlay — the writable working disk the
