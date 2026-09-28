@@ -73,7 +73,10 @@ func (c *VmBakeCmd) Run() error {
 	// the entity's own disk (the golden's backing file) and produced a circular qcow2
 	// backing chain (plugin-vm#54: `qemu-img: Backing file … creates an infinite loop`).
 	fmt.Fprintf(os.Stderr, "bake %q: phase 1/2 — booting the bake domain %q (per-domain overlay onto the frozen base)\n", c.Box, bakeDomain)
-	if err := (&VmCreateCmd{Box: c.Box, Domain: bakeDomain, KeepDisk: true}).Run(); err != nil {
+	// KeepDisk only when the caller supplied --domain: that domain's disk is the one a
+	// golden captured on it backs onto. The derived <entity>-bake path creates a fresh
+	// overlay as before.
+	if err := (&VmCreateCmd{Box: c.Box, Domain: bakeDomain, KeepDisk: c.Domain != ""}).Run(); err != nil {
 		return fmt.Errorf("vm bake: booting %q: %w", c.Box, err)
 	}
 

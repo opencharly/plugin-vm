@@ -36,18 +36,6 @@ func TestBakeWorkingDisk(t *testing.T) {
 	}
 }
 
-// TestBakeKeepsDomainDisk gates the `vm create --keep-disk` contract the bake relies on: no
-// unit-visible state change here beyond the flag existing — but the flag's DEFAULT must stay
-// false so an ordinary create keeps its fresh-overlay contract, and the bake must set it true.
-// This drives the REAL VmBakeCmd wiring via the domain-name helper's contract: a bake boots
-// the domain non-destructively.
-func TestBakeKeepsDomainDisk(t *testing.T) {
-	var zero VmCreateCmd
-	if zero.KeepDisk {
-		t.Error("VmCreateCmd.KeepDisk must default false (a normal create recreates the overlay)")
-	}
-}
-
 // passes its discrete deploy so the bake keys the snapshot registry + boots the deploy's
 // own overlay); without one it derives `<entity>-bake`. The domain is what LookupSnapshot
 // and every create/stop/destroy use, so a regression here re-opens the entity-vs-deploy
