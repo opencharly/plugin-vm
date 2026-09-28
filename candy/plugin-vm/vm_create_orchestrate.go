@@ -86,12 +86,23 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	qcow2Abs := baseAbs
 	if perDomain {
 		overlay := filepath.Join(vmStateDir, "disk.qcow2")
-		// Fresh overlay on every (re)create: a create fires only on first boot or after a destroy,
-		// so the domain always boots clean off the CURRENT base (the disposable-bed / fresh-rebuild
-		// contract). qemu-img refuses an existing target, so drop a stale overlay first.
-		_ = os.Remove(overlay)
-		if err := qemuImgCreateOverlay(baseAbs, overlay); err != nil {
-			return fmt.Errorf("creating per-domain disk overlay for %s: %w", vmDomainName, err)
+		// A bake REUSES the domain's existing disk: a golden captured on this domain BACKS
+		// ONTO it, so recreating (removing + overlaying) would delete the golden's backing
+		// and corrupt the bake (it would boot an empty overlay). The bake's create is
+		// therefore non-destructive (KeepDisk); otherwise a fresh overlay is the default
+		// (re)create contract.
+		if !c.KeepDisk {
+			// Fresh overlay on every (re)create: a create fires only on first boot or after a
+			// destroy, so the domain always boots clean off the CURRENT base (the disposable-bed /
+			// fresh-rebuild contract). qemu-img refuses an existing target, so drop a stale overlay
+			// first.
+			_ = os.Remove(overlay)
+			if err := qemuImgCreateOverlay(baseAbs, overlay); err != nil {
+				return fmt.Errorf("creating per-domain disk overlay for %s: %w", vmDomainName, err)
+			}
+		}
+		if _, serr := os.Stat(overlay); serr != nil {
+			return fmt.Errorf("per-domain disk %s missing after create for %s: %w", overlay, vmDomainName, serr)
 		}
 		qcow2Abs, _ = filepath.Abs(overlay)
 	}
