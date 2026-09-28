@@ -183,6 +183,7 @@ type VmCreateCmd struct {
 	Instance        string `short:"i" name:"instance" help:"Instance name"`
 	Domain          string `name:"domain" help:"Per-deploy domain identity: name the libvirt domain charly-<domain> (+ its per-domain disk overlay/state/ssh alias) after the DEPLOY, not the kind:vm entity. Set by the deploy path so sibling beds sharing one entity get distinct domains; absent for a direct create (domain = entity)."`
 	SshKey          string `name:"ssh-key" default:"auto" help:"SSH public key: path to .pub file, 'auto' (default ~/.ssh key), 'generate', or 'none'"`
+	KeepDisk        bool   `name:"keep-disk" help:"Reuse the domain's EXISTING disk instead of recreating the overlay. Set by vm bake --domain: the bake boots the deploy's own disk (a golden captured on this domain backs onto it), so recreating it would remove the backing."`
 	AutoDetectFlags `embed:""`
 }
 
