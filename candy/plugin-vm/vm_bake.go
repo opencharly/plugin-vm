@@ -27,6 +27,7 @@ type VmBakeCmd struct {
 	Candy         string `name:"candy" help:"Comma-separated layers to apply in-guest BEFORE the snapshot freeze (delegated to charly deploy add vm:<name>)"`
 	Console       bool   `name:"console" help:"Enable console output for debugging the boot"`
 	FromSnapshot  string `name:"from-snapshot" help:"the golden snapshot to bake (required — the bake materializes the base as a clone of the entity's own golden at this snapshot)"`
+	Domain        string `name:"domain" help:"Bake against a per-deploy DOMAIN (a disposable vm: deploy of this entity) instead of the entity's own identity. The golden snapshot is looked up on this domain; the bake boots + flattens the domain's own overlay. Use this from a bed/automation so the destroyed VM is the deploy (which must be disposable: true), never the shared entity."`
 	ContainerDisk bool   `name:"container-disk" help:"Emit the baked box with the disk at /disk/disk.img (the KubeVirt containerDisk contract a cluster boots directly) instead of the default /disk.qcow2. This is the produce half for a Cua Fleet / KubeVirt image: the in-guest candy bake is frozen and delivered as a containerDisk."`
 	Push          string `name:"push" help:"After emitting, retag and push the baked box image to this registry-pullable ref. An explicit --push makes the delivery load-bearing."`
 }
@@ -49,7 +50,14 @@ func (c *VmBakeCmd) Run() error {
 	if err := bakeRequiresSnapshot(c.FromSnapshot); err != nil {
 		return err
 	}
-	if _, err := LookupSnapshot(c.Box, c.FromSnapshot); err != nil {
+
+	// The bake drives a DOMAIN IDENTITY. With --domain (a bed/automation path) the domain
+	// IS the deploy the caller declared `disposable: true`; without it (the direct operator
+	// path) the domain is a derived `<entity>-bake`. The domain keys EVERY subsequent verb
+	// (create/stop/destroy) AND the snapshot registry (snapshotVmName), so the golden the
+	// bake looks up is the one captured ON this domain.
+	bakeDomain := bakeDomainName(c.Box, c.Domain)
+	if _, err := LookupSnapshot(bakeDomain, c.FromSnapshot); err != nil {
 		return err
 	}
 
@@ -59,16 +67,12 @@ func (c *VmBakeCmd) Run() error {
 	}
 	engine := kit.EngineBinary(rt.RunEngine)
 
-	// The bake boots a PER-DOMAIN DOMAIN: its disk is a per-domain overlay onto the
-	// entity's frozen base, so the base — and the golden snapshot that backs onto it —
-	// stay immutable. This REPLACES the former BuildClone, which materialized the clone
-	// INTO the entity's own disk (which is the golden's backing file) and produced a
-	// circular qcow2 backing chain (plugin-vm#54: `qemu-img: Backing file … creates an
-	// infinite loop`).
-	bakeDomain := c.Box + "-bake"
-
-	// Phase 1/2 — boot the bake domain (a per-domain overlay onto the frozen base).
-	fmt.Fprintf(os.Stderr, "bake %q: phase 1/2 — booting the bake domain (per-domain overlay onto the frozen base)\n", c.Box)
+	// Phase 1/2 — boot the bake domain: its disk is the domain's own overlay onto the
+	// frozen base, so the base — and the golden snapshot that backs onto it — stay
+	// immutable. This REPLACES the former BuildClone, which materialized the clone INTO
+	// the entity's own disk (the golden's backing file) and produced a circular qcow2
+	// backing chain (plugin-vm#54: `qemu-img: Backing file … creates an infinite loop`).
+	fmt.Fprintf(os.Stderr, "bake %q: phase 1/2 — booting the bake domain %q (per-domain overlay onto the frozen base)\n", c.Box, bakeDomain)
 	if err := (&VmCreateCmd{Box: c.Box, Domain: bakeDomain}).Run(); err != nil {
 		return fmt.Errorf("vm bake: booting %q: %w", c.Box, err)
 	}
@@ -91,7 +95,7 @@ func (c *VmBakeCmd) Run() error {
 	if len(layers) > 0 {
 		fmt.Fprintf(os.Stderr, "bake %q: phase 3 — apply the layer(s) in-guest with the shared IR walk:\n", c.Box)
 		fmt.Fprintf(os.Stderr, "  charly deploy add vm:%s --domain %s %s\n", c.Box, bakeDomain, strings.Join(layers, " "))
-		fmt.Fprintf(os.Stderr, "then re-run: charly vm bake %s --from-snapshot %s (WITHOUT --candy) to flatten the baked state and emit the box\n", c.Box, c.FromSnapshot)
+		fmt.Fprintf(os.Stderr, "then re-run: charly vm bake %s --from-snapshot %s --domain %s (WITHOUT --candy) to flatten the baked state and emit the box\n", c.Box, c.FromSnapshot, bakeDomain)
 		return nil
 	}
 
@@ -124,12 +128,27 @@ func (c *VmBakeCmd) Run() error {
 		return err
 	}
 
-	// Cleanup — destroy the bake domain + its overlay (the box is the artifact). Keep the
-	// entity's charly.yml entry: the bake domain is a throwaway vessel, not a deploy.
+	// Cleanup — destroy the bake domain + its overlay (the box is the artifact).
+	// --domain: the domain is a disposable deploy the caller owns (its destroy is the
+	// deploy's own teardown; KeepDeploy stays true so a `vm:` deploy's charly.yml entry
+	// is untouched). Without --domain: the derived `<entity>-bake` domain is a throwaway
+	// vessel, not a deploy.
 	if err := (&VmDestroyCmd{Box: c.Box, Domain: bakeDomain, Disk: true, KeepDeploy: true}).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "vm bake: note: destroying the bake domain: %v\n", err)
 	}
 	return nil
+}
+
+// bakeDomainName resolves the DOMAIN IDENTITY a bake drives. With an explicit --domain the
+// domain IS the caller's deploy (which must be `disposable: true` so the bake's destroy is
+// the deploy's own authorized teardown); otherwise it is the derived `<entity>-bake`. The
+// domain keys EVERY bake verb (create/stop/destroy) AND the snapshot registry — the golden
+// is looked up on THIS domain, never the entity's. Pure, so the wiring is unit-testable.
+func bakeDomainName(entity, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return entity + "-bake"
 }
 
 // bakeWorkingDisk is the bake domain's per-domain overlay — the writable working disk the
