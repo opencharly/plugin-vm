@@ -1,7 +1,5 @@
-version: 2026.232.0520
 plugin-vm:
     candy:
-        version: 2026.177.0400
         description: |-
             The VM subsystem relocated into a COMPILED-IN plugin candy (P10). It provides TWO
             capabilities: verb:libvirt — the `libvirt` live check verb (list, info, screenshot,
