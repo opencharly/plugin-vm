@@ -74,7 +74,7 @@ func vmMarshalNode() func(string, *deploykit.DeployNode) (*yaml.Node, error) {
 // deploykit.SaveVmDeployState / RemoveVmDeployEntry take, supplying vmMarshalNode + the
 // loader-backed reader (the fail-safe re-read SaveDeployConfig performs).
 func vmSaveDeployConfig(dc *deploykit.DeployConfig) error {
-	return deploykit.SaveDeployConfig(dc, vmMarshalNode(), vmLoadDeployConfig)
+	return deploykit.SaveDeployConfig(dc, vmMarshalNode(), vmLoadDeployConfig, cmdCtx)
 }
 
 // hostConfigPersist saves (or, with remove, deletes) an entity's deploy-ledger entry PLUGIN-SIDE
@@ -90,7 +90,7 @@ func hostConfigPersist(key, entity string, st *spec.VmDeployState, remove bool) 
 		return fmt.Errorf("config-persist: empty deploy key")
 	}
 	if remove {
-		return deploykit.RemoveVmDeployEntry(key, vmSaveDeployConfig, vmLoadDeployConfig)
+		return deploykit.RemoveVmDeployEntry(key, vmSaveDeployConfig, vmLoadDeployConfig, cmdCtx)
 	}
-	return deploykit.SaveVmDeployState(key, entity, st, vmSaveDeployConfig, vmLoadDeployConfig)
+	return deploykit.SaveVmDeployState(key, entity, st, vmSaveDeployConfig, vmLoadDeployConfig, cmdCtx)
 }
