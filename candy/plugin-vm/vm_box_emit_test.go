@@ -208,28 +208,26 @@ func TestPushVmBox_Argv(t *testing.T) {
 	}
 
 	wantPush := []string{"podman", "push", "reg.example/charly-vm:1"}
+	wantTag := []string{"podman", "tag", "localhost/charly-vm:1", "reg.example/charly-vm:1"}
+	wantStableTag := []string{"podman", "tag", "reg.example/charly-vm:1", "reg.example/charly-vm:latest"}
+	wantStablePush := []string{"podman", "push", "reg.example/charly-vm:latest"}
 
+	// src != dst: tag + push, THEN the stable `:latest` twin at the destination
+	// (tag + push) — so a consumer that names the box statically can pull it.
 	if err := pushVmBox("podman", "localhost/charly-vm:1", "reg.example/charly-vm:1"); err != nil {
 		t.Fatalf("pushVmBox: %v", err)
 	}
-	if len(calls) != 2 {
-		t.Fatalf("want tag+push (2 engine calls), got %d: %v", len(calls), calls)
-	}
-	wantTag := []string{"podman", "tag", "localhost/charly-vm:1", "reg.example/charly-vm:1"}
-	if !reflect.DeepEqual(calls[0], wantTag) {
-		t.Errorf("tag argv = %v, want %v", calls[0], wantTag)
-	}
-	if !reflect.DeepEqual(calls[1], wantPush) {
-		t.Errorf("push argv = %v, want %v", calls[1], wantPush)
+	if want := [][]string{wantTag, wantPush, wantStableTag, wantStablePush}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("pushVmBox engine calls = %v, want %v", calls, want)
 	}
 
-	// Same ref: the tag is skipped, push only.
+	// Same ref: the src tag is skipped; the dst push + the stable twin remain.
 	calls = nil
 	if err := pushVmBox("podman", "reg.example/charly-vm:1", "reg.example/charly-vm:1"); err != nil {
 		t.Fatalf("pushVmBox (same ref): %v", err)
 	}
-	if len(calls) != 1 || !reflect.DeepEqual(calls[0], wantPush) {
-		t.Errorf("same-ref push calls = %v, want just %v", calls, wantPush)
+	if want := [][]string{wantPush, wantStableTag, wantStablePush}; !reflect.DeepEqual(calls, want) {
+		t.Errorf("same-ref push calls = %v, want %v", calls, want)
 	}
 
 	// Empty destination is rejected before any engine call.
@@ -403,5 +401,48 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	}
 	if out, err := exec.Command("podman", "cp", cid+":/disk.qcow2", filepath.Join(t.TempDir(), "x")).CombinedOutput(); err == nil {
 		t.Errorf("the containerDisk payload must NOT carry the VM-box default /disk.qcow2; cp succeeded:\n%s", out)
+	}
+}
+
+// TestEmitVmBox_StableTagLive: the emit writes a stable :latest handle alongside the
+// wall-clock CalVer tag — a consumer that must NAME the box (a kind:kubevirt
+// containerDisk.image) cannot know the CalVer. Fails without the stable tag.
+func TestEmitVmBox_StableTagLive(t *testing.T) {
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skipf("podman not available on this host — skipping: %v", err)
+	}
+	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("writing fixture disk: %v", err)
+	}
+	s := emitFixtureSpec()
+	ref, err := emitVmBox("podman", "vm-box-stable-tag", s, diskPath, "")
+	if err != nil {
+		t.Fatalf("emitVmBox: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("podman", "rmi", "-f", ref, "localhost/charly-vm-box-stable-tag:latest").Run()
+	})
+	if err := exec.Command("podman", "image", "exists", "localhost/charly-vm-box-stable-tag:latest").Run(); err != nil {
+		t.Fatalf("no stable :latest handle after emit: %v", err)
+	}
+}
+
+// TestLatestRef pins the destination-side stable-handle computation: the `--push`
+// path publishes BOTH the CalVer ref and a `:latest` handle at the registry, so a
+// consumer that must NAME the box statically (a kind:kubevirt containerDisk.image)
+// resolves it. A registry host:port is preserved; a digest-pinned ref is unchanged.
+func TestLatestRef(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"registry.example.com/charly-box:2026.270.0000", "registry.example.com/charly-box:latest"},
+		{"registry.example.com:5000/charly-box:v1", "registry.example.com:5000/charly-box:latest"},
+		{"registry.example.com/charly-box", "registry.example.com/charly-box:latest"},
+		{"localhost/charly-vm:latest", "localhost/charly-vm:latest"},
+		{"registry.example.com/charly-box@sha256:abc", "registry.example.com/charly-box@sha256:abc"},
+	}
+	for _, c := range cases {
+		if got := latestRef(c.in); got != c.want {
+			t.Errorf("latestRef(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

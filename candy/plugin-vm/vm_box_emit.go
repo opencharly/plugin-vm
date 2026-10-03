@@ -104,6 +104,17 @@ func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath stri
 	if err := deploykit.EmitVmBoxAt(engine, ref, meta, diskPath, path); err != nil {
 		return "", fmt.Errorf("emitting VM box %s: %w", ref, err)
 	}
+	// A STABLE `:latest` handle alongside the CalVer tag: the CalVer is wall-clock and
+	// unknowable to a consumer that must NAME the box statically — a kind:kubevirt
+	// `containerDisk.image`, or any authored ref. With both tags on the one image, a
+	// consumer names `localhost/charly-<vm>:latest` and a registry push carries both.
+	// ONE derivation (latestRef) shared with the --push path, so the two cannot diverge.
+	stable := latestRef(ref)
+	if stable != ref {
+		if err := retagImage(engine, ref, stable); err != nil {
+			return "", fmt.Errorf("tagging the stable box ref %s: %w", stable, err)
+		}
+	}
 	return ref, nil
 }
 
@@ -146,5 +157,32 @@ func pushVmBox(engine, srcRef, dstRef string) error {
 	if err := engineCmd(container.EngineBinary(engine), "push", dstRef); err != nil {
 		return fmt.Errorf("pushing %s: %w", dstRef, err)
 	}
+	// Publish the STABLE `:latest` handle at the destination too, so a registry consumer
+	// that must NAME the box statically (a kind:kubevirt `containerDisk.image`) resolves
+	// the same image the CalVer ref does — the registry twin of emitVmBox's local handle.
+	if stable := latestRef(dstRef); stable != dstRef {
+		if err := retagImage(engine, dstRef, stable); err != nil {
+			return err
+		}
+		if err := engineCmd(container.EngineBinary(engine), "push", stable); err != nil {
+			return fmt.Errorf("pushing the stable handle %s: %w", stable, err)
+		}
+	}
 	return nil
+}
+
+// latestRef returns ref with its tag replaced by `:latest` (appending `:latest` when ref
+// carries no tag) — the destination-side twin of emitVmBox's stable local handle. A
+// registry host:port in the first path segment is preserved (only the LAST segment's tag
+// is touched); a digest-pinned ref is returned unchanged (a tag would be discarded).
+func latestRef(ref string) string {
+	if strings.Contains(ref, "@") {
+		return ref
+	}
+	slash := strings.LastIndex(ref, "/")
+	colon := strings.LastIndex(ref, ":")
+	if colon > slash {
+		return ref[:colon] + ":latest"
+	}
+	return ref + ":latest"
 }
