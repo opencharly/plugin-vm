@@ -476,6 +476,20 @@ func destroyVmDomain(name string, deleteDisk bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return destroyVmDomainOnBackend(name, backend, stateDir, deleteDisk)
+}
+
+// destroyVmDomainOnBackend performs the teardown for an ALREADY-probed backend, so the arm logic
+// (notably the --disk host-state-dir cleanup) is unit-testable without a live domain. It is the
+// single implementation destroyVmDomain delegates to (R3 — one probe wrapper, one teardown).
+//
+// The libvirt arm removes the per-domain HOST state dir ($VmStateRoot/charly-<domain>/) when
+// deleteDisk is set, exactly as the qemu arm does. Before this fix the libvirt arm returned without
+// touching it, so `charly vm destroy <libvirt-vm> --disk` printed success while orphaning the live
+// overlay (up to tens of GB per VM, the dominant cleanup lever on a full host); only a SECOND
+// identical destroy reclaimed it, by accident, via the qemu fallback once the domain was gone
+// (plugin-vm#64).
+func destroyVmDomainOnBackend(name, backend, stateDir string, deleteDisk bool) (bool, error) {
 	switch backend {
 	case "libvirt":
 		dr, ok := invokeVmPluginEnv(vmPluginEnv{VmOp: "destroy", VmName: name, DeleteDisk: deleteDisk})
@@ -491,6 +505,15 @@ func destroyVmDomain(name string, deleteDisk bool) (bool, error) {
 		if vr, ok := invokeVmPluginEnv(vmPluginEnv{VmOp: "domain-state", VmName: name}); ok && vmPluginOpFlag(vr, "exists") {
 			return false, fmt.Errorf("VM %s: libvirt reported the destroy succeeded but the domain is still defined", name)
 		}
+		// --disk must also reclaim the per-domain HOST state dir (the live disk.qcow2 overlay, the
+		// snapshots/, the ssh keys, seed ISO) — not only the repo image/<entity>/ dir the caller
+		// removes. The libvirt arm never did (#64); the state dir path is resolved through the ONE
+		// shared resolver (vmDir → vmshared.VmStateRoot) the qemu arm's stateDir also derives from.
+		if deleteDisk {
+			if err := removeVmStateDir(name); err != nil {
+				return true, fmt.Errorf("removing VM state dir for %s: %w", name, err)
+			}
+		}
 		return true, nil
 	case "qemu":
 		// Kill process — try QMP quit first, fall back to PID kill.
@@ -503,6 +526,16 @@ func destroyVmDomain(name string, deleteDisk bool) (bool, error) {
 		return true, nil
 	}
 	return false, nil // no libvirt domain and no qemu state dir → nothing to destroy
+}
+
+// removeVmStateDir removes the per-domain host state dir ($VmStateRoot/<name>/) — the ONE path
+// resolver (R3) both destroy arms share: vmHolder derives the qemu stateDir the same way.
+func removeVmStateDir(name string) error {
+	root, err := vmDir()
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(root, name))
 }
 
 // stopVmDomain stops the VM domain named `name` from whichever backend ACTUALLY holds it and

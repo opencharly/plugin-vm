@@ -65,3 +65,83 @@ func TestDestroyVmDomain_QemuStateDir(t *testing.T) {
 		t.Fatalf("destroyVmDomain(qemu): state dir %s still present after teardown", stateDir)
 	}
 }
+
+// TestRemoveVmStateDir guards the ONE shared per-domain state-dir resolver+removal the libvirt and
+// qemu destroy arms both use (R3). Hermetic — no libvirt, no HOME dependency — so it always runs.
+func TestRemoveVmStateDir(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHARLY_VM_STATE_DIR", root)
+	name := "charly-remove-state-dir-fixture"
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Join(dir, "snapshots"), 0o755); err != nil {
+		t.Fatalf("seed state dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "disk.qcow2"), []byte("overlay"), 0o644); err != nil {
+		t.Fatalf("seed overlay: %v", err)
+	}
+	if err := removeVmStateDir(name); err != nil {
+		t.Fatalf("removeVmStateDir: %v", err)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Fatalf("removeVmStateDir left %s behind: %v", dir, statErr)
+	}
+}
+
+// TestDestroyVmDomain_LibvirtDiskRemovesStateDir is the #64 regression guard: the libvirt destroy arm
+// with --disk (deleteDisk=true) MUST reclaim the per-domain HOST state dir, not only the repo
+// image/<entity>/ dir. Before the fix the arm returned without touching it, so `vm destroy --disk`
+// printed success while orphaning the live overlay (up to tens of GB), reclaimed only by a SECOND
+// identical destroy via the qemu fallback. The libvirt destroy op is idempotent on a missing domain,
+// so a uniquely-named fixture exercises the real arm without a live domain. Skipped under -short (the
+// op probes the libvirt session daemon, like the sibling tests).
+func TestDestroyVmDomain_LibvirtDiskRemovesStateDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("probes the libvirt session daemon; skipped under -short")
+	}
+	root := t.TempDir()
+	t.Setenv("CHARLY_VM_STATE_DIR", root)
+	name := "charly-vm64-regression-libvirt-disk-fixture"
+	stateDir := filepath.Join(root, name)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("seed state dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "disk.qcow2"), []byte("overlay"), 0o644); err != nil {
+		t.Fatalf("seed overlay: %v", err)
+	}
+	torn, err := destroyVmDomainOnBackend(name, "libvirt", "", true)
+	if err != nil {
+		t.Fatalf("destroyVmDomainOnBackend(libvirt, --disk): unexpected error: %v", err)
+	}
+	if !torn {
+		t.Fatal("destroyVmDomainOnBackend(libvirt, --disk): torn=false — a probed backend must report torn")
+	}
+	if _, statErr := os.Stat(stateDir); !os.IsNotExist(statErr) {
+		t.Fatalf("libvirt --disk left the per-domain state dir behind (plugin-vm#64): %s", stateDir)
+	}
+}
+
+// TestDestroyVmDomain_LibvirtKeepDiskPreservesStateDir proves the fix is gated on --disk: destroying
+// a libvirt VM WITHOUT --disk must NOT touch the state dir (--keep-disk semantics — the domain's disk
+// can be a golden snapshot's backing). Skipped under -short like its sibling.
+func TestDestroyVmDomain_LibvirtKeepDiskPreservesStateDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("probes the libvirt session daemon; skipped under -short")
+	}
+	root := t.TempDir()
+	t.Setenv("CHARLY_VM_STATE_DIR", root)
+	name := "charly-vm64-regression-libvirt-keepdisk-fixture"
+	stateDir := filepath.Join(root, name)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("seed state dir: %v", err)
+	}
+	torn, err := destroyVmDomainOnBackend(name, "libvirt", "", false)
+	if err != nil {
+		t.Fatalf("destroyVmDomainOnBackend(libvirt, no --disk): unexpected error: %v", err)
+	}
+	if !torn {
+		t.Fatal("destroyVmDomainOnBackend(libvirt, no --disk): torn=false — a probed backend must report torn")
+	}
+	if _, statErr := os.Stat(stateDir); statErr != nil {
+		t.Fatalf("libvirt destroy WITHOUT --disk removed the state dir — --keep-disk violated: %v", statErr)
+	}
+}
