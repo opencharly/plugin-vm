@@ -538,6 +538,24 @@ func removeVmStateDir(name string) error {
 	return os.RemoveAll(filepath.Join(root, name))
 }
 
+// removeEntityBaseDisk removes the kind:vm ENTITY base disk dir (image/<entity>/, holding
+// disk.qcow2 + seed.iso) — but ONLY for a DIRECT entity destroy (domain == ""). vmDiskDir resolves
+// to the shared read-only BASE every per-deploy overlay for that entity backs onto (sdk/vmshared
+// VmDiskDir), so a --domain (deploy-path) destroy must NOT delete it: doing so corrupts every
+// sibling domain built on the same entity (plugin-vm#65). Returns the removed dir (for the
+// operator-facing "Deleted disk images in …" line) or "" when nothing was removed.
+func removeEntityBaseDisk(box, domain string) (string, error) {
+	if domain != "" {
+		return "", nil // --domain destroy reclaims its own overlay via the state dir, never the base
+	}
+	dir, err := vmDiskDir(box)
+	if err != nil {
+		return "", err
+	}
+	_ = os.RemoveAll(dir)
+	return dir, nil
+}
+
 // stopVmDomain stops the VM domain named `name` from whichever backend ACTUALLY holds it and
 // VERIFIES the stop, returning stopped=true only when a domain was found and stopped — #77, the stop
 // sibling of #69's destroyVmDomain, sharing the vmHolder probe (R3: ONE authoritative-probe
@@ -665,14 +683,21 @@ func (c *VmDestroyCmd) Run() error {
 	}
 
 	if c.Disk {
-		// Remove only THIS VM's disk dir — never the shared parent (which
-		// would delete every other VM's disk too).
-		qcow2Dir, derr := vmDiskDir(c.Box)
+		// Remove the entity's BASE disk dir ONLY on a DIRECT entity destroy
+		// (c.Domain == ""). vmDiskDir(c.Box) resolves to image/<entity>/ — which
+		// sdk/vmshared.VmDiskDir documents as "the shared read-only BASE every
+		// per-deploy overlay backs onto". Deleting it from a --domain destroy
+		// (the deploy path, e.g. a check-bed teardown's domain) would corrupt
+		// every OTHER domain built on the same entity (plugin-vm#65): the
+		// per-deploy destroy already reclaims its OWN overlay via the state dir
+		// (destroyVmDomainOnBackend, plugin-vm#64), never the shared base.
+		removed, derr := removeEntityBaseDisk(c.Box, c.Domain)
 		if derr != nil {
 			return derr
 		}
-		_ = os.RemoveAll(qcow2Dir)
-		fmt.Fprintf(os.Stderr, "Deleted disk images in %s\n", qcow2Dir)
+		if removed != "" {
+			fmt.Fprintf(os.Stderr, "Deleted disk images in %s\n", removed)
+		}
 	}
 
 	// Remove the charly.yml vm:<name> entry — the inverse of the deploykit.SaveVmDeployState

@@ -66,6 +66,51 @@ func TestDestroyVmDomain_QemuStateDir(t *testing.T) {
 	}
 }
 
+// TestRemoveEntityBaseDisk is the #65 guard: a DIRECT entity destroy (domain=="")
+// reclaims image/<entity>/ (disk.qcow2 + seed.iso), but a --domain destroy must NOT —
+// that dir is the shared read-only BASE every per-deploy overlay backs onto, so removing
+// it from the deploy path corrupts every sibling domain. Hermetic (CHARLY_VM_IMAGE_DIR
+// pins an absolute temp root — no cwd/config dependency).
+func TestRemoveEntityBaseDisk(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHARLY_VM_IMAGE_DIR", root)
+	entity := "probe-entity"
+	base := filepath.Join(root, entity)
+	seed := func() {
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			t.Fatalf("seed base dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(base, "disk.qcow2"), []byte("base"), 0o644); err != nil {
+			t.Fatalf("seed base disk: %v", err)
+		}
+	}
+
+	// --domain destroy: the shared base MUST survive (the #65 fix).
+	seed()
+	removed, err := removeEntityBaseDisk(entity, "check-some-bed")
+	if err != nil {
+		t.Fatalf("removeEntityBaseDisk(--domain): %v", err)
+	}
+	if removed != "" {
+		t.Fatalf("removeEntityBaseDisk(--domain) reported removing %q — must not touch the shared base", removed)
+	}
+	if _, statErr := os.Stat(filepath.Join(base, "disk.qcow2")); statErr != nil {
+		t.Fatalf("--domain destroy deleted the shared entity base (plugin-vm#65): %v", statErr)
+	}
+
+	// Direct entity destroy: the base IS reclaimed.
+	removed, err = removeEntityBaseDisk(entity, "")
+	if err != nil {
+		t.Fatalf("removeEntityBaseDisk(direct): %v", err)
+	}
+	if removed == "" {
+		t.Fatal("removeEntityBaseDisk(direct) did not report a removed dir")
+	}
+	if _, statErr := os.Stat(base); !os.IsNotExist(statErr) {
+		t.Fatalf("direct entity destroy left the base behind: %v", statErr)
+	}
+}
+
 // TestRemoveVmStateDir guards the ONE shared per-domain state-dir resolver+removal the libvirt and
 // qemu destroy arms both use (R3). Hermetic — no libvirt, no HOME dependency — so it always runs.
 func TestRemoveVmStateDir(t *testing.T) {
