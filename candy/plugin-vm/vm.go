@@ -476,6 +476,20 @@ func destroyVmDomain(name string, deleteDisk bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return destroyVmDomainOnBackend(name, backend, stateDir, deleteDisk)
+}
+
+// destroyVmDomainOnBackend performs the teardown for an ALREADY-probed backend, so the arm logic
+// (notably the --disk host-state-dir cleanup) is unit-testable without a live domain. It is the
+// single implementation destroyVmDomain delegates to (R3 — one probe wrapper, one teardown).
+//
+// The libvirt arm removes the per-domain HOST state dir ($VmStateRoot/charly-<domain>/) when
+// deleteDisk is set, exactly as the qemu arm does. Before this fix the libvirt arm returned without
+// touching it, so `charly vm destroy <libvirt-vm> --disk` printed success while orphaning the live
+// overlay (up to tens of GB per VM, the dominant cleanup lever on a full host); only a SECOND
+// identical destroy reclaimed it, by accident, via the qemu fallback once the domain was gone
+// (plugin-vm#64).
+func destroyVmDomainOnBackend(name, backend, stateDir string, deleteDisk bool) (bool, error) {
 	switch backend {
 	case "libvirt":
 		dr, ok := invokeVmPluginEnv(vmPluginEnv{VmOp: "destroy", VmName: name, DeleteDisk: deleteDisk})
@@ -491,6 +505,15 @@ func destroyVmDomain(name string, deleteDisk bool) (bool, error) {
 		if vr, ok := invokeVmPluginEnv(vmPluginEnv{VmOp: "domain-state", VmName: name}); ok && vmPluginOpFlag(vr, "exists") {
 			return false, fmt.Errorf("VM %s: libvirt reported the destroy succeeded but the domain is still defined", name)
 		}
+		// --disk must also reclaim the per-domain HOST state dir (the live disk.qcow2 overlay, the
+		// snapshots/, the ssh keys, seed ISO) — not only the repo image/<entity>/ dir the caller
+		// removes. The libvirt arm never did (#64); the state dir path is resolved through the ONE
+		// shared resolver (vmDir → vmshared.VmStateRoot) the qemu arm's stateDir also derives from.
+		if deleteDisk {
+			if err := removeVmStateDir(name); err != nil {
+				return true, fmt.Errorf("removing VM state dir for %s: %w", name, err)
+			}
+		}
 		return true, nil
 	case "qemu":
 		// Kill process — try QMP quit first, fall back to PID kill.
@@ -503,6 +526,34 @@ func destroyVmDomain(name string, deleteDisk bool) (bool, error) {
 		return true, nil
 	}
 	return false, nil // no libvirt domain and no qemu state dir → nothing to destroy
+}
+
+// removeVmStateDir removes the per-domain host state dir ($VmStateRoot/<name>/) — the ONE path
+// resolver (R3) both destroy arms share: vmHolder derives the qemu stateDir the same way.
+func removeVmStateDir(name string) error {
+	root, err := vmDir()
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(root, name))
+}
+
+// removeEntityBaseDisk removes the kind:vm ENTITY base disk dir (image/<entity>/, holding
+// disk.qcow2 + seed.iso) — but ONLY for a DIRECT entity destroy (domain == ""). vmDiskDir resolves
+// to the shared read-only BASE every per-deploy overlay for that entity backs onto (sdk/vmshared
+// VmDiskDir), so a --domain (deploy-path) destroy must NOT delete it: doing so corrupts every
+// sibling domain built on the same entity (plugin-vm#65). Returns the removed dir (for the
+// operator-facing "Deleted disk images in …" line) or "" when nothing was removed.
+func removeEntityBaseDisk(box, domain string) (string, error) {
+	if domain != "" {
+		return "", nil // --domain destroy reclaims its own overlay via the state dir, never the base
+	}
+	dir, err := vmDiskDir(box)
+	if err != nil {
+		return "", err
+	}
+	_ = os.RemoveAll(dir)
+	return dir, nil
 }
 
 // stopVmDomain stops the VM domain named `name` from whichever backend ACTUALLY holds it and
@@ -632,14 +683,21 @@ func (c *VmDestroyCmd) Run() error {
 	}
 
 	if c.Disk {
-		// Remove only THIS VM's disk dir — never the shared parent (which
-		// would delete every other VM's disk too).
-		qcow2Dir, derr := vmDiskDir(c.Box)
+		// Remove the entity's BASE disk dir ONLY on a DIRECT entity destroy
+		// (c.Domain == ""). vmDiskDir(c.Box) resolves to image/<entity>/ — which
+		// sdk/vmshared.VmDiskDir documents as "the shared read-only BASE every
+		// per-deploy overlay backs onto". Deleting it from a --domain destroy
+		// (the deploy path, e.g. a check-bed teardown's domain) would corrupt
+		// every OTHER domain built on the same entity (plugin-vm#65): the
+		// per-deploy destroy already reclaims its OWN overlay via the state dir
+		// (destroyVmDomainOnBackend, plugin-vm#64), never the shared base.
+		removed, derr := removeEntityBaseDisk(c.Box, c.Domain)
 		if derr != nil {
 			return derr
 		}
-		_ = os.RemoveAll(qcow2Dir)
-		fmt.Fprintf(os.Stderr, "Deleted disk images in %s\n", qcow2Dir)
+		if removed != "" {
+			fmt.Fprintf(os.Stderr, "Deleted disk images in %s\n", removed)
+		}
 	}
 
 	// Remove the charly.yml vm:<name> entry — the inverse of the deploykit.SaveVmDeployState
