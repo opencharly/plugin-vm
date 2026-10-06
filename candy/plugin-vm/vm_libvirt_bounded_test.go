@@ -53,15 +53,16 @@ func blockingSeams(t *testing.T) {
 	t.Cleanup(func() { close(block) })
 
 	od, os_, ou := rawDomainDestroy, rawDomainShutdown, rawDomainUndefine
-	ol, on, onm, olk, odel := rawDomainLookup, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
+	ol, og, on, onm, olk, odel := rawDomainLookup, rawDomainGetState, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
 	t.Cleanup(func() {
 		rawDomainDestroy, rawDomainShutdown, rawDomainUndefine = od, os_, ou
-		rawDomainLookup, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = ol, on, onm, olk, odel
+		rawDomainLookup, rawDomainGetState, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = ol, og, on, onm, olk, odel
 	})
 	rawDomainDestroy = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainShutdown = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainUndefine = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { <-block; return libvirt.Domain{}, nil }
+	rawDomainGetState = func(*libvirt.Libvirt, libvirt.Domain) (int32, error) { <-block; return 0, nil }
 	rawSnapshotNum = func(*libvirt.Libvirt, libvirt.Domain) (int32, error) { <-block; return 0, nil }
 	rawSnapshotNames = func(*libvirt.Libvirt, libvirt.Domain, int32) ([]string, error) { <-block; return nil, nil }
 	rawSnapshotLookup = func(*libvirt.Libvirt, libvirt.Domain, string) (libvirt.DomainSnapshot, error) {
@@ -95,6 +96,7 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }, true},
 		{"undefine", func() error { return conn.undefineDomain(dom, false) }, true},
 		{"domain lookup", func() error { _, err := conn.lookupDomain("x"); return err }, true},
+		{"domain state", func() error { _, err := conn.domainState(dom); return err }, true},
 		// Each snapshot-leg RPC is its own bounded method -> its own guard. Driving each
 		// directly proves the wrapper at EACH (the old leg-level test short-circuited on the
 		// first timeout and never reached the inner RPCs).

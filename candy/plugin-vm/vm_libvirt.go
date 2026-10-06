@@ -165,13 +165,18 @@ func (c *libvirtConn) lookupDomain(name string) (libvirt.Domain, error) {
 	})
 }
 
-// domainState returns the current state of a domain.
+// domainState returns the current state of a domain. BOUNDED: DomainGetState is
+// context-less in go-libvirt, and the destroy path reaches it repeatedly
+// (gracefulStopDomain's pre-check, its SHUTOFF poll, and its post-check) BEFORE it ever
+// reaches the bounded destroy — so an unbounded state read would wedge `vm destroy`
+// before the fix even applies (finishing opencharly/charly#800; the same class as the
+// other bounded teardown RPCs).
 func (c *libvirtConn) domainState(dom libvirt.Domain) (libvirt.DomainState, error) {
-	state, _, err := c.l.DomainGetState(dom, 0)
+	st, err := boundedRPCValue("domain state", teardownRPCBound, func() (int32, error) { return rawDomainGetState(c.l, dom) })
 	if err != nil {
 		return 0, err
 	}
-	return libvirt.DomainState(state), nil
+	return libvirt.DomainState(st), nil
 }
 
 // startDomain starts a defined domain. Before calling libvirt's
@@ -192,6 +197,10 @@ func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
 // defaults to the real go-libvirt method.
 var (
 	rawDomainLookup   = func(l *libvirt.Libvirt, name string) (libvirt.Domain, error) { return l.DomainLookupByName(name) }
+	rawDomainGetState = func(l *libvirt.Libvirt, d libvirt.Domain) (int32, error) {
+		st, _, err := l.DomainGetState(d, 0)
+		return int32(st), err
+	}
 	rawDomainShutdown = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainShutdown(d) }
 	rawDomainDestroy  = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainDestroy(d) }
 	rawDomainUndefine = func(l *libvirt.Libvirt, d libvirt.Domain) error {
