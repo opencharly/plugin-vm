@@ -210,28 +210,44 @@ var (
 )
 
 // removeDomainSnapshots deletes every snapshot record on `dom` (metadata-only; charly
-// owns the disk lifecycle — charly#800). Every RPC is bounded, and the leg is a named
-// helper so the call-site boundedness guard can drive it with the raw seams blocking
-// forever.
+// owns the disk lifecycle — charly#800). Each RPC is a bounded method, so EACH has its
+// own guard and none is reachable-unbounded.
 func (c *libvirtConn) removeDomainSnapshots(dom libvirt.Domain) {
-	n, nerr := boundedRPCValue("snapshot list", teardownRPCBound, func() (int32, error) { return rawSnapshotNum(c.l, dom) })
+	n, nerr := c.snapshotNum(dom)
 	if nerr != nil || n <= 0 {
 		return
 	}
-	names, lerr := boundedRPCValue("snapshot names", teardownRPCBound, func() ([]string, error) { return rawSnapshotNames(c.l, dom, n) })
+	names, lerr := c.snapshotNames(dom, n)
 	if lerr != nil {
 		return
 	}
 	for _, name := range names {
-		snap, serr := boundedRPCValue("snapshot lookup", teardownRPCBound, func() (libvirt.DomainSnapshot, error) {
-			return rawSnapshotLookup(c.l, dom, name)
-		})
+		snap, serr := c.snapshotLookup(dom, name)
 		if serr != nil {
 			continue
 		}
-		// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings.
-		_ = boundedRPC("snapshot delete", teardownRPCBound, func() error { return rawSnapshotDelete(c.l, snap) })
+		_ = c.snapshotDelete(snap)
 	}
+}
+
+// The four snapshot-leg RPCs, each bounded and individually guarded (see the call-site
+// boundedness test): a wedged virtqemud must not hang destroy at any of them (#800).
+func (c *libvirtConn) snapshotNum(dom libvirt.Domain) (int32, error) {
+	return boundedRPCValue("snapshot list", teardownRPCBound, func() (int32, error) { return rawSnapshotNum(c.l, dom) })
+}
+
+func (c *libvirtConn) snapshotNames(dom libvirt.Domain, n int32) ([]string, error) {
+	return boundedRPCValue("snapshot names", teardownRPCBound, func() ([]string, error) { return rawSnapshotNames(c.l, dom, n) })
+}
+
+func (c *libvirtConn) snapshotLookup(dom libvirt.Domain, name string) (libvirt.DomainSnapshot, error) {
+	return boundedRPCValue("snapshot lookup", teardownRPCBound, func() (libvirt.DomainSnapshot, error) {
+		return rawSnapshotLookup(c.l, dom, name)
+	})
+}
+
+func (c *libvirtConn) snapshotDelete(snap libvirt.DomainSnapshot) error {
+	return boundedRPC("snapshot delete", teardownRPCBound, func() error { return rawSnapshotDelete(c.l, snap) })
 }
 
 // shutdownDomain requests a graceful shutdown.

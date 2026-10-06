@@ -95,11 +95,13 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }, true},
 		{"undefine", func() error { return conn.undefineDomain(dom, false) }, true},
 		{"domain lookup", func() error { _, err := conn.lookupDomain("x"); return err }, true},
-		// removeDomainSnapshots swallows per-RPC errors (best-effort teardown), so the bound is
-		// proven by the leg RETURNING: with every raw snapshot seam blocking forever, an
-		// unbounded site inside the leg would hang this subtest. The named-error path is the
-		// same boundedRPCValue seam the "domain lookup" case already proves.
-		{"snapshot leg", func() error { conn.removeDomainSnapshots(dom); return nil }, false},
+		// Each snapshot-leg RPC is its own bounded method -> its own guard. Driving each
+		// directly proves the wrapper at EACH (the old leg-level test short-circuited on the
+		// first timeout and never reached the inner RPCs).
+		{"snapshot list", func() error { _, err := conn.snapshotNum(dom); return err }, true},
+		{"snapshot names", func() error { _, err := conn.snapshotNames(dom, 3); return err }, true},
+		{"snapshot lookup", func() error { _, err := conn.snapshotLookup(dom, "s"); return err }, true},
+		{"snapshot delete", func() error { return conn.snapshotDelete(libvirt.DomainSnapshot{}) }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
