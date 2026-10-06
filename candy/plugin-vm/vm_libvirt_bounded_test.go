@@ -47,21 +47,31 @@ func TestBoundedRPC_PassesThroughSuccess(t *testing.T) {
 
 // blockingSeams swaps every teardown raw seam for a call that blocks forever — the
 // wedged-virtqemud shape — and restores them on cleanup.
+//
+// The block channel is NEVER closed. A bounded call site returns at its bound and
+// abandons its goroutine blocked on `block`; that goroutine MUST stay blocked for the
+// rest of the process, because once a subtest restores the real seams for the next case,
+// a released goroutine would run the seam's real body against this test's nil libvirt
+// handle and panic. Letting it leak (the process exits with the test binary) is the safe
+// choice for a regression guard. (The earlier `close(block)` cleanup is exactly what made
+// a mutated run panic in a LATER subtest instead of failing cleanly at the bound.)
 func blockingSeams(t *testing.T) {
 	t.Helper()
 	block := make(chan struct{})
-	t.Cleanup(func() { close(block) })
 
 	od, os_, ou := rawDomainDestroy, rawDomainShutdown, rawDomainUndefine
-	ol, on, onm, olk, odel := rawDomainLookup, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
+	ol, og, on, onm, olk, odel := rawDomainLookup, rawDomainGetState, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
+	oc, ode, ox, oa := rawDomainCreate, rawDomainDefine, rawDomainGetXML, rawDomainAutostart
 	t.Cleanup(func() {
 		rawDomainDestroy, rawDomainShutdown, rawDomainUndefine = od, os_, ou
-		rawDomainLookup, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = ol, on, onm, olk, odel
+		rawDomainLookup, rawDomainGetState, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = ol, og, on, onm, olk, odel
+		rawDomainCreate, rawDomainDefine, rawDomainGetXML, rawDomainAutostart = oc, ode, ox, oa
 	})
 	rawDomainDestroy = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainShutdown = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainUndefine = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { <-block; return libvirt.Domain{}, nil }
+	rawDomainGetState = func(*libvirt.Libvirt, libvirt.Domain) (int32, error) { <-block; return 0, nil }
 	rawSnapshotNum = func(*libvirt.Libvirt, libvirt.Domain) (int32, error) { <-block; return 0, nil }
 	rawSnapshotNames = func(*libvirt.Libvirt, libvirt.Domain, int32) ([]string, error) { <-block; return nil, nil }
 	rawSnapshotLookup = func(*libvirt.Libvirt, libvirt.Domain, string) (libvirt.DomainSnapshot, error) {
@@ -69,6 +79,10 @@ func blockingSeams(t *testing.T) {
 		return libvirt.DomainSnapshot{}, nil
 	}
 	rawSnapshotDelete = func(*libvirt.Libvirt, libvirt.DomainSnapshot) error { <-block; return nil }
+	rawDomainCreate = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
+	rawDomainDefine = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { <-block; return libvirt.Domain{}, nil }
+	rawDomainGetXML = func(*libvirt.Libvirt, libvirt.Domain) (string, error) { <-block; return "", nil }
+	rawDomainAutostart = func(*libvirt.Libvirt, libvirt.Domain, int32) error { <-block; return nil }
 }
 
 // TestTeardownCallSitesAreBounded drives the REAL teardown methods (not boundedRPC in
@@ -77,7 +91,6 @@ func blockingSeams(t *testing.T) {
 // directly, the corresponding subtest hangs (the bound is what turns the wedge into a
 // return), so this fails exactly when the wrapper is missing at the call site.
 func TestTeardownCallSitesAreBounded(t *testing.T) {
-	blockingSeams(t)
 	oldBound := teardownRPCBound
 	teardownRPCBound = 150 * time.Millisecond
 	t.Cleanup(func() { teardownRPCBound = oldBound })
@@ -88,29 +101,70 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 
 	cases := []struct {
 		label  string
+		prereq func() // releases a sibling seam the method calls BEFORE the one under test
 		run    func() error
-		namedE bool // true when the call site surfaces a NAMED bounded error (leg swallows → false)
+		want   string // non-empty: the returned error must name this bounded op
 	}{
-		{"force destroy", func() error { return conn.destroyDomain(dom) }, true},
-		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }, true},
-		{"undefine", func() error { return conn.undefineDomain(dom, false) }, true},
-		{"domain lookup", func() error { _, err := conn.lookupDomain("x"); return err }, true},
+		{"force destroy", nil, func() error { return conn.destroyDomain(dom) }, "force destroy"},
+		{"graceful shutdown", nil, func() error { return conn.shutdownDomain(dom) }, "graceful shutdown"},
+		{"undefine", nil, func() error { return conn.undefineDomain(dom, false) }, "undefine"},
+		{"domain lookup", nil, func() error { _, err := conn.lookupDomain("x"); return err }, "domain lookup"},
+		{"domain state", nil, func() error { _, err := conn.domainState(dom); return err }, "domain state"},
 		// Each snapshot-leg RPC is its own bounded method -> its own guard. Driving each
 		// directly proves the wrapper at EACH (the old leg-level test short-circuited on the
 		// first timeout and never reached the inner RPCs).
-		{"snapshot list", func() error { _, err := conn.snapshotNum(dom); return err }, true},
-		{"snapshot names", func() error { _, err := conn.snapshotNames(dom, 3); return err }, true},
-		{"snapshot lookup", func() error { _, err := conn.snapshotLookup(dom, "s"); return err }, true},
-		{"snapshot delete", func() error { return conn.snapshotDelete(libvirt.DomainSnapshot{}) }, true},
+		{"snapshot list", nil, func() error { _, err := conn.snapshotNum(dom); return err }, "snapshot list"},
+		{"snapshot names", nil, func() error { _, err := conn.snapshotNames(dom, 3); return err }, "snapshot names"},
+		{"snapshot lookup", nil, func() error { _, err := conn.snapshotLookup(dom, "s"); return err }, "snapshot lookup"},
+		{"snapshot delete", nil, func() error { return conn.snapshotDelete(libvirt.DomainSnapshot{}) }, "snapshot delete"},
+		// The helper wrappers (one per RPC after the R3 dedup): drive each directly.
+		{"domain XML", nil, func() error { _, err := conn.getDomainXML(dom); return err }, "domain XML"},
+		{"domain define", nil, func() error { _, err := conn.defineDomain("<domain/>"); return err }, "domain define"},
+		{"domain create", nil, func() error { return conn.createDomain(dom) }, "domain create"},
+		// activeDiskPath (start path's disk-chmod XML read) routes through c.getDomainXML;
+		// its bound names the shared op "domain XML".
+		{"active disk path", nil, func() error { _, err := conn.activeDiskPath(dom); return err }, "domain XML"},
+		// ensureDomainSocketDirs (create/start pre-bind(2) XML read) also routes through
+		// c.getDomainXML; assert only that it returns at the bound with the inner op name.
+		{"socket dirs", nil, func() error { return conn.ensureDomainSocketDirs(dom) }, "domain XML"},
+		{"domain autostart", func() {
+			rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+		}, func() error { return conn.setDomainAutostart("x", true) }, "domain autostart"},
+		// defineAndStartDomain makes TWO bounded RPCs of its own — defineDomain and
+		// createDomain — so EACH gets its own guard driving the METHOD (not the helper):
+		// if the method ever calls its raw seam directly, the wedge is reached unbounded
+		// and this hangs → fails at the bound. prereq releases the sibling seams reached
+		// BEFORE the one under test so the site UNDER TEST is the one that blocks.
+		{"define and start domain define", func() {
+			rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+		}, func() error { return conn.defineAndStartDomain("<domain/>", "x") }, "domain define"},
+		{"define and start domain create", func() {
+			rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+			rawDomainDefine = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+			rawDomainGetXML = func(*libvirt.Libvirt, libvirt.Domain) (string, error) { return "<domain/>", nil }
+		}, func() error { return conn.defineAndStartDomain("<domain/>", "x") }, "domain create"},
+		// The reconcile call site: release every OTHER seam; only the leftover lookup can
+		// block, so a bare rawDomainLookup here hangs → fails at the bound. Its bounded
+		// error is swallowed by the `err == nil` guard, so a clean return is the pass.
+		{"define and start reconcile", func() {
+			rawDomainDefine = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+			rawDomainGetXML = func(*libvirt.Libvirt, libvirt.Domain) (string, error) { return "<domain/>", nil }
+			rawDomainCreate = func(*libvirt.Libvirt, libvirt.Domain) error { return nil }
+		}, func() error { return conn.defineAndStartDomain("<domain/>", "x") }, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
+			// Isolate per subtest: a prereq override must not leak into a later case.
+			blockingSeams(t)
+			if tc.prereq != nil {
+				tc.prereq()
+			}
 			done := make(chan error, 1)
 			go func() { done <- tc.run() }()
 			select {
 			case err := <-done:
-				if tc.namedE && (err == nil || !strings.Contains(err.Error(), tc.label)) {
-					t.Fatalf("%s call site must return a NAMED bounded error, got %v", tc.label, err)
+				if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+					t.Fatalf("%s call site must return a NAMED bounded error containing %q, got %v", tc.label, tc.want, err)
 				}
 			case <-time.After(bound):
 				t.Fatalf("%s call site did NOT return at the bound — the boundedRPC wrapper is missing at the call site", tc.label)

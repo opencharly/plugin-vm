@@ -165,13 +165,18 @@ func (c *libvirtConn) lookupDomain(name string) (libvirt.Domain, error) {
 	})
 }
 
-// domainState returns the current state of a domain.
+// domainState returns the current state of a domain. BOUNDED: DomainGetState is
+// context-less in go-libvirt, and the destroy path reaches it repeatedly
+// (gracefulStopDomain's pre-check, its SHUTOFF poll, and its post-check) BEFORE it ever
+// reaches the bounded destroy — so an unbounded state read would wedge `vm destroy`
+// before the fix even applies (finishing opencharly/charly#800; the same class as the
+// other bounded teardown RPCs).
 func (c *libvirtConn) domainState(dom libvirt.Domain) (libvirt.DomainState, error) {
-	state, _, err := c.l.DomainGetState(dom, 0)
+	st, err := boundedRPCValue("domain state", teardownRPCBound, func() (int32, error) { return rawDomainGetState(c.l, dom) })
 	if err != nil {
 		return 0, err
 	}
-	return libvirt.DomainState(state), nil
+	return libvirt.DomainState(st), nil
 }
 
 // startDomain starts a defined domain. Before calling libvirt's
@@ -181,10 +186,10 @@ func (c *libvirtConn) domainState(dom libvirt.Domain) (libvirt.DomainState, erro
 // in time for the QEMU bind(2) call, and QEMU fails with
 // "bind: No such file or directory". Pre-creating is idempotent.
 func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
-	if err := ensureDomainSocketDirs(c.l, dom); err != nil {
+	if err := c.ensureDomainSocketDirs(dom); err != nil {
 		return fmt.Errorf("preparing socket dirs: %w", err)
 	}
-	return c.l.DomainCreate(dom)
+	return c.createDomain(dom)
 }
 
 // Teardown RPC seams: package vars so a test can substitute a BLOCKING raw call and
@@ -192,7 +197,17 @@ func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
 // defaults to the real go-libvirt method.
 var (
 	rawDomainLookup   = func(l *libvirt.Libvirt, name string) (libvirt.Domain, error) { return l.DomainLookupByName(name) }
-	rawDomainShutdown = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainShutdown(d) }
+	rawDomainGetState = func(l *libvirt.Libvirt, d libvirt.Domain) (int32, error) {
+		st, _, err := l.DomainGetState(d, 0)
+		return int32(st), err
+	}
+	rawDomainShutdown  = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainShutdown(d) }
+	rawDomainCreate    = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainCreate(d) }
+	rawDomainGetXML    = func(l *libvirt.Libvirt, d libvirt.Domain) (string, error) { return l.DomainGetXMLDesc(d, 0) }
+	rawDomainDefine    = func(l *libvirt.Libvirt, xml string) (libvirt.Domain, error) { return l.DomainDefineXML(xml) }
+	rawDomainAutostart = func(l *libvirt.Libvirt, d libvirt.Domain, flag int32) error {
+		return l.DomainSetAutostart(d, flag)
+	}
 	rawDomainDestroy  = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainDestroy(d) }
 	rawDomainUndefine = func(l *libvirt.Libvirt, d libvirt.Domain) error {
 		return l.DomainUndefineFlags(d, libvirt.DomainUndefineNvram|libvirt.DomainUndefineManagedSave)
@@ -319,7 +334,10 @@ func (c *libvirtConn) undefineDomain(dom libvirt.Domain, _ bool) error {
 // <disk device='disk'> source file) from the domain XML. Used by the start op
 // to chmod a snapshot-anchored active disk writable before qemu opens it.
 func (c *libvirtConn) activeDiskPath(dom libvirt.Domain) (string, error) {
-	xmlStr, err := c.l.DomainGetXMLDesc(dom, 0)
+	// BOUNDED via c.getDomainXML -> rawDomainGetXML (R3: reuse, do not re-inline the
+	// wrapper): the start path reads the domain XML here to chmod a snapshot-anchored
+	// active disk before qemu opens it, so a wedged virtqemud must not hang it.
+	xmlStr, err := c.getDomainXML(dom)
 	if err != nil {
 		return "", fmt.Errorf("reading domain XML: %w", err)
 	}
@@ -338,21 +356,21 @@ func (c *libvirtConn) defineAndStartDomain(xmlStr, domainName string) error {
 	// and undefine-by-recorded-uuid then misses it. Undefine by NAME first so every
 	// create — and every disposable-bed `charly update` re-run — self-heals.
 	if domainName != "" {
-		if existing, err := c.l.DomainLookupByName(domainName); err == nil {
+		if existing, err := c.lookupDomain(domainName); err == nil {
 			if s, serr := c.domainState(existing); serr == nil && s != libvirt.DomainShutoff {
 				_ = c.destroyDomain(existing)
 			}
 			_ = c.undefineDomain(existing, false)
 		}
 	}
-	dom, err := c.l.DomainDefineXML(xmlStr)
+	dom, err := c.defineDomain(xmlStr)
 	if err != nil {
 		return fmt.Errorf("defining domain: %w", err)
 	}
-	if err := ensureDomainSocketDirs(c.l, dom); err != nil {
+	if err := c.ensureDomainSocketDirs(dom); err != nil {
 		return fmt.Errorf("preparing socket dirs: %w", err)
 	}
-	if err := c.l.DomainCreate(dom); err != nil {
+	if err := c.createDomain(dom); err != nil {
 		return fmt.Errorf("starting domain: %w", err)
 	}
 	return nil
@@ -368,8 +386,10 @@ func (c *libvirtConn) defineAndStartDomain(xmlStr, domainName string) error {
 // `~/.config/libvirt/qemu/lib/domain-<id>-<name>/` before handing
 // off to QEMU, which then fails bind(2) on the SPICE socket. We
 // shoulder that responsibility here.
-func ensureDomainSocketDirs(l *libvirt.Libvirt, dom libvirt.Domain) error {
-	xmlStr, err := l.DomainGetXMLDesc(dom, 0)
+func (c *libvirtConn) ensureDomainSocketDirs(dom libvirt.Domain) error {
+	// BOUNDED via c.getDomainXML -> rawDomainGetXML: a wedged virtqemud must not hang
+	// create/start at this pre-bind(2) XML read (the same class as the teardown bounds).
+	xmlStr, err := c.getDomainXML(dom)
 	if err != nil {
 		return fmt.Errorf("reading domain XML: %w", err)
 	}
@@ -475,12 +495,24 @@ func extractGraphicsSocketPaths(xmlStr string) []string {
 
 // getDomainXML returns the XML description of a domain.
 func (c *libvirtConn) getDomainXML(dom libvirt.Domain) (string, error) {
-	return c.l.DomainGetXMLDesc(dom, 0)
+	return boundedRPCValue("domain XML", teardownRPCBound, func() (string, error) { return rawDomainGetXML(c.l, dom) })
 }
 
-// redefineDomain redefines a domain from XML string.
+// defineDomain defines a domain from XML string. BOUNDED, and the ONE wrapper for
+// rawDomainDefine (R3): shared by defineAndStartDomain and redefineDomain.
+func (c *libvirtConn) defineDomain(xmlStr string) (libvirt.Domain, error) {
+	return boundedRPCValue("domain define", teardownRPCBound, func() (libvirt.Domain, error) { return rawDomainDefine(c.l, xmlStr) })
+}
+
+// createDomain starts a DEFINED domain. BOUNDED, and the ONE wrapper for
+// rawDomainCreate (R3): shared by startDomain and defineAndStartDomain.
+func (c *libvirtConn) createDomain(dom libvirt.Domain) error {
+	return boundedRPC("domain create", teardownRPCBound, func() error { return rawDomainCreate(c.l, dom) })
+}
+
+// redefineDomain redefines a domain.
 func (c *libvirtConn) redefineDomain(xmlStr string) error {
-	_, err := c.l.DomainDefineXML(xmlStr)
+	_, err := c.defineDomain(xmlStr)
 	return err
 }
 
@@ -498,7 +530,7 @@ func (c *libvirtConn) setDomainAutostart(name string, on bool) error {
 	if on {
 		flag = 1
 	}
-	if err := c.l.DomainSetAutostart(dom, flag); err != nil {
+	if err := boundedRPC("domain autostart", teardownRPCBound, func() error { return rawDomainAutostart(c.l, dom, flag) }); err != nil {
 		return fmt.Errorf("setting autostart on %s: %w", name, err)
 	}
 	return nil
