@@ -95,7 +95,7 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 	// Identify the disk's libvirt target name (e.g. "vda"). Read the
 	// running domain XML and extract the first <disk type='file'>'s
 	// <target dev='...'/> attribute.
-	xmlStr, err := conn.l.DomainGetXMLDesc(dom, 0)
+	xmlStr, err := conn.getDomainXML(dom)
 	if err != nil {
 		return fmt.Errorf("reading domain XML: %w", err)
 	}
@@ -128,7 +128,7 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 		flags |= libvirt.DomainSnapshotCreateQuiesce
 	}
 	flags |= libvirt.DomainSnapshotCreateAtomic
-	if _, err := conn.l.DomainSnapshotCreateXML(dom, string(xmlBytes), uint32(flags)); err != nil {
+	if _, err := conn.snapshotCreateXML(dom, string(xmlBytes), uint32(flags)); err != nil {
 		// On guests without qemu-guest-agent, the Quiesce flag may
 		// fail. Retry without it as a fallback when --quiesce was
 		// requested but no agent is available — EXCEPT under
@@ -137,7 +137,7 @@ func createExternalSnapshot(opts SnapshotCreateOpts, outFile string) error {
 		if opts.Quiesce && !strictQuiesce.Load() {
 			fmt.Fprintln(os.Stderr, "note: quiesce failed (qemu-guest-agent not available?); retrying without --quiesce")
 			flags &^= libvirt.DomainSnapshotCreateQuiesce
-			if _, err2 := conn.l.DomainSnapshotCreateXML(dom, string(xmlBytes), uint32(flags)); err2 != nil {
+			if _, err2 := conn.snapshotCreateXML(dom, string(xmlBytes), uint32(flags)); err2 != nil {
 				return fmt.Errorf("DomainSnapshotCreateXML: %w (after quiesce-fallback)", err2)
 			}
 			return nil
@@ -261,7 +261,7 @@ func deleteExternalSnapshot(vmName string, entry *SnapshotEntry) error {
 	if libvirtName == "" {
 		libvirtName = entry.Name
 	}
-	snap, err := conn.l.DomainSnapshotLookupByName(dom, libvirtName, 0)
+	snap, err := conn.snapshotLookupByName(dom, libvirtName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "note: snapshot %q not found via libvirt (already deleted?): %v\n", libvirtName, err)
 		return nil
@@ -270,7 +270,7 @@ func deleteExternalSnapshot(vmName string, entry *SnapshotEntry) error {
 	// removed by the caller), and a full delete (flags 0) tries to unlink the disk file
 	// which HANGS when it is the running domain's in-use backing (measured: >2min vs
 	// libvirt --metadata's 14ms on a keep_venue running domain).
-	if err := conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags()); err != nil {
+	if err := conn.snapshotDeleteByHandle(snap); err != nil {
 		return fmt.Errorf("DomainSnapshotDelete %q: %w", libvirtName, err)
 	}
 	return nil
@@ -296,11 +296,11 @@ func revertExternalSnapshot(vmName string, entry *SnapshotEntry) error {
 	if libvirtName == "" {
 		libvirtName = entry.Name
 	}
-	snap, err := conn.l.DomainSnapshotLookupByName(dom, libvirtName, 0)
+	snap, err := conn.snapshotLookupByName(dom, libvirtName)
 	if err != nil {
 		return fmt.Errorf("DomainSnapshotLookupByName %q: %w", libvirtName, err)
 	}
-	if err := conn.l.DomainRevertToSnapshot(snap, 0); err != nil {
+	if err := conn.revertToSnapshot(snap); err != nil {
 		return fmt.Errorf("DomainRevertToSnapshot %q: %w", libvirtName, err)
 	}
 	return nil

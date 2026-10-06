@@ -16,6 +16,7 @@ package vm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -104,15 +105,17 @@ type frameSource interface {
 
 // libvirtFrameSource wraps the go-libvirt connection + domain as a frameSource
 // over the plugin's existing DomainScreenshot drain (libvirt_ops.go), including
-// its virsh fallback for the virtio-gpu RPC-stream framing break.
+// its virsh fallback for the virtio-gpu RPC-stream framing break. Holds the
+// *libvirtConn so the drain is BOUNDED (plugin-vm#73): a wedged virtqemud returns
+// a named error instead of hanging the recorder.
 type libvirtFrameSource struct {
-	l      *libvirt.Libvirt
+	c      *libvirtConn
 	dom    libvirt.Domain
 	screen uint
 }
 
 func (s *libvirtFrameSource) Screenshot() (image.Image, error) {
-	return captureDomainScreenshot(s.l, s.dom, s.screen)
+	return s.c.captureDomainScreenshot(s.dom, s.screen)
 }
 
 // RunSessionRecorder is the detached-mode engine (cmd/serve, recorder mode): dials
@@ -137,7 +140,7 @@ func RunSessionRecorder(cfg RecorderConfig, done <-chan struct{}) (int, error) {
 	if st, serr := conn.domainState(dom); serr == nil && st != libvirt.DomainRunning {
 		return 0, fmt.Errorf("recorder: domain %q not running (state %s)", cfg.Endpoint.Domain, domainStateString(st))
 	}
-	src := &libvirtFrameSource{l: conn.l, dom: dom, screen: uint(cfg.Endpoint.Screen)}
+	src := &libvirtFrameSource{c: conn, dom: dom, screen: uint(cfg.Endpoint.Screen)}
 	return captureSession(src, cfg, done)
 }
 
@@ -161,7 +164,13 @@ func captureSession(s frameSource, cfg RecorderConfig, done <-chan struct{}) (in
 		return 0, fmt.Errorf("recorder: close %s: %w", framesFile, cerr)
 	}
 	if werr != nil {
-		return 0, fmt.Errorf("recorder: writing %s: %w", framesFile, werr)
+		// A writer failure is a real output failure; a bounded-screenshot stop (or a
+		// run of empty frames) is a display/daemon condition. Both surface here, but the
+		// writer case is wrapped so a caller can tell them apart.
+		if errors.Is(werr, errRecorderWriterFailed) {
+			return 0, fmt.Errorf("recorder: writing %s: %w", framesFile, werr)
+		}
+		return 0, fmt.Errorf("recorder: frame capture stopped after %d frame(s): %w", count, werr)
 	}
 	if err := finalizeSession(cfg, count); err != nil {
 		return 0, err
@@ -182,16 +191,32 @@ func captureInterval(fps int) time.Duration {
 	return d
 }
 
+// errRecorderWriterFailed is a distinct sentinel (plugin-vm#73): it tells
+// captureSession the stop was a real output failure (surface it, do not finalize as
+// a clean recording), as opposed to a display/daemon stop.
+var errRecorderWriterFailed = errors.New("recorder: frame writer failed")
+
+// recorderConsecutiveFailLimit is how many CONSECUTIVE Screenshot failures end the
+// recording. One skipped frame is a transient; a run of them under a bounded
+// screenshot (plugin-vm#73) means the daemon is wedged, and every further poll would
+// abandon ANOTHER blocked goroutine on the same wedged stream — so the recorder stops
+// and surfaces it. A var so the guard test can lower it.
+var recorderConsecutiveFailLimit = 5
+
 // writeFrames polls the framebuffer source at interval, appending each frame as a
 // JPEG onto w until done closes. Video semantics identical to the record loop:
-// every poll is one frame of the stream (a full DomainScreenshot per frame; a
-// poll that errors is skipped — a broken display just stops appending). Returns
-// the frame count, and a writer error (the output file failing mid-recording is
-// a real failure, not a skipped frame).
+// every poll is one frame of the stream (a full DomainScreenshot per frame). A SINGLE
+// poll error is skipped (a transient glitch just misses one frame), but
+// recorderConsecutiveFailLimit consecutive failures STOP the recording and return the
+// last error — under the bounded screenshot (plugin-vm#73) a run of them means a wedged
+// daemon, and continuing would abandon a blocked goroutine per poll. Returns the frame
+// count and, on a real writer failure (the output file failing mid-recording, wrapped
+// as errRecorderWriterFailed), that error.
 func writeFrames(s frameSource, interval time.Duration, w io.Writer, done <-chan struct{}) (int, error) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	count := 0
+	fails := 0
 	for {
 		select {
 		case <-done:
@@ -199,14 +224,22 @@ func writeFrames(s frameSource, interval time.Duration, w io.Writer, done <-chan
 		case <-tick.C:
 			img, err := s.Screenshot()
 			if err != nil || img == nil {
+				fails++
+				if fails >= recorderConsecutiveFailLimit {
+					if err != nil {
+						return count, err
+					}
+					return count, fmt.Errorf("recorder: %d consecutive empty frames", fails)
+				}
 				continue
 			}
+			fails = 0
 			b := encodeFrame(img)
 			if len(b) == 0 {
 				continue
 			}
 			if _, werr := w.Write(b); werr != nil {
-				return count, werr
+				return count, fmt.Errorf("%w: %v", errRecorderWriterFailed, werr)
 			}
 			count++
 		}

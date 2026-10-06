@@ -66,7 +66,7 @@ func (c *LibvirtListCmd) Run() error {
 	defer conn.Close() //nolint:errcheck
 
 	flags := libvirt.ConnectListDomainsActive | libvirt.ConnectListDomainsInactive
-	doms, _, err := conn.l.ConnectListAllDomains(1, flags)
+	doms, err := conn.listAllDomains(1, flags)
 	if err != nil {
 		return fmt.Errorf("listing domains: %w", err)
 	}
@@ -79,10 +79,10 @@ func (c *LibvirtListCmd) Run() error {
 	}
 	var rows []row
 	for _, d := range doms {
-		state, _, serr := conn.l.DomainGetState(d, 0)
+		st, serr := conn.domainState(d)
 		s := "unknown"
 		if serr == nil {
-			s = domainStateString(libvirt.DomainState(state))
+			s = domainStateString(st)
 		}
 		uuidHex := fmt.Sprintf("%x", d.UUID[:])
 		rows = append(rows, row{Name: d.Name, State: s, Uuid: uuidHex, Id: d.ID})
@@ -114,11 +114,11 @@ func (c *LibvirtInfoCmd) Run() error {
 	}
 	defer t.Close() //nolint:errcheck
 
-	state, _, err := t.Conn.l.DomainGetState(t.Domain, 0)
+	state, err := t.Conn.domainState(t.Domain)
 	if err != nil {
 		return fmt.Errorf("getting state: %w", err)
 	}
-	_, maxMem, memory, nrCPU, cpuTime, err := t.Conn.l.DomainGetInfo(t.Domain)
+	_, maxMem, memory, nrCPU, cpuTime, err := t.Conn.domainInfo(t.Domain)
 	if err != nil {
 		return fmt.Errorf("getting info: %w", err)
 	}
@@ -212,7 +212,7 @@ func (c *LibvirtScreenshotCmd) Run() error {
 		return err
 	}
 
-	img, err := captureDomainScreenshot(t.Conn.l, t.Domain, uint(c.Screen))
+	img, err := t.Conn.captureDomainScreenshot(t.Domain, uint(c.Screen))
 	if err != nil {
 		return fmt.Errorf("screenshot: %w", err)
 	}
@@ -260,7 +260,7 @@ func (c *LibvirtSendKeyCmd) Run() error {
 		return err
 	}
 	// codeset 1 = Linux keycode set.
-	if err := t.Conn.l.DomainSendKey(t.Domain, 1, uint32(c.Hold), codes, 0); err != nil {
+	if err := t.Conn.sendKey(t.Domain, 1, uint32(c.Hold), codes, 0); err != nil {
 		return fmt.Errorf("DomainSendKey: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Sent %d key(s) to %s: %s\n", len(codes), t.DomName, strings.Join(c.Keys, "+"))
@@ -318,7 +318,7 @@ func (c *LibvirtPasswdCmd) Run() error {
 	if c.Persist {
 		flags |= libvirt.DomainDeviceModifyConfig
 	}
-	if err := t.Conn.l.DomainUpdateDeviceFlags(t.Domain, string(out), flags); err != nil {
+	if err := t.Conn.updateDeviceFlags(t.Domain, string(out), flags); err != nil {
 		return fmt.Errorf("UpdateDeviceFlags: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Updated %s password on %s (live%s)\n",
@@ -388,7 +388,7 @@ func (c *LibvirtQmpCmd) Run() error {
 		return err
 	}
 	// Flag 0 = QMP (default), 1 = HMP.
-	rep, err := t.Conn.l.QEMUDomainMonitorCommand(t.Domain, string(buf), 0)
+	rep, err := t.Conn.qmpCommand(t.Domain, string(buf), 0)
 	if err != nil {
 		return fmt.Errorf("QMP: %w", err)
 	}
@@ -425,7 +425,7 @@ func (c *LibvirtDomainXMLCmd) Run() error {
 	if c.Config {
 		flags |= libvirt.DomainXMLInactive
 	}
-	xmlStr, err := t.Conn.l.DomainGetXMLDesc(t.Domain, flags)
+	xmlStr, err := t.Conn.domainXML(t.Domain, flags)
 	if err != nil {
 		return fmt.Errorf("getting XML: %w", err)
 	}
@@ -481,7 +481,7 @@ func (c *LibvirtEventsCmd) Run() error {
 	prev := map[string]string{}
 	for time.Now().Before(deadline) {
 		flags := libvirt.ConnectListDomainsActive | libvirt.ConnectListDomainsInactive
-		doms, _, err := conn.l.ConnectListAllDomains(1, flags)
+		doms, err := conn.listAllDomains(1, flags)
 		if err != nil {
 			return err
 		}
@@ -489,11 +489,11 @@ func (c *LibvirtEventsCmd) Run() error {
 			if target != "" && d.Name != target {
 				continue
 			}
-			state, _, serr := conn.l.DomainGetState(d, 0)
+			st, serr := conn.domainState(d)
 			if serr != nil {
 				continue
 			}
-			s := domainStateString(libvirt.DomainState(state))
+			s := domainStateString(st)
 			if prev[d.Name] != s && prev[d.Name] != "" {
 				fmt.Printf("%s  %s: %s → %s\n",
 					time.Now().Format(time.RFC3339), d.Name, prev[d.Name], s)
@@ -911,7 +911,7 @@ func (c *LibvirtSnapshotListCmd) Run() error {
 		return err
 	}
 	defer t.Close() //nolint:errcheck
-	snaps, _, err := t.Conn.l.DomainListAllSnapshots(t.Domain, 1, 0)
+	snaps, err := t.Conn.listSnapshots(t.Domain)
 	if err != nil {
 		return err
 	}
@@ -948,7 +948,7 @@ func (c *LibvirtSnapshotCreateCmd) Run() error {
 	if c.DiskOnly {
 		flags |= uint32(libvirt.DomainSnapshotCreateDiskOnly)
 	}
-	_, err = t.Conn.l.DomainSnapshotCreateXML(t.Domain, string(xmlStr), flags)
+	_, err = t.Conn.snapshotCreateXML(t.Domain, string(xmlStr), flags)
 	if err != nil {
 		return fmt.Errorf("creating snapshot: %w", err)
 	}
@@ -968,11 +968,11 @@ func (c *LibvirtSnapshotInfoCmd) Run() error {
 		return err
 	}
 	defer t.Close() //nolint:errcheck
-	snap, err := t.Conn.l.DomainSnapshotLookupByName(t.Domain, c.Name, 0)
+	snap, err := t.Conn.snapshotLookupByName(t.Domain, c.Name)
 	if err != nil {
 		return err
 	}
-	xmlStr, err := t.Conn.l.DomainSnapshotGetXMLDesc(snap, 0)
+	xmlStr, err := t.Conn.snapshotXMLDesc(snap)
 	if err != nil {
 		return err
 	}
@@ -992,11 +992,11 @@ func (c *LibvirtSnapshotRevertCmd) Run() error {
 		return err
 	}
 	defer t.Close() //nolint:errcheck
-	snap, err := t.Conn.l.DomainSnapshotLookupByName(t.Domain, c.Name, 0)
+	snap, err := t.Conn.snapshotLookupByName(t.Domain, c.Name)
 	if err != nil {
 		return err
 	}
-	if err := t.Conn.l.DomainRevertToSnapshot(snap, 0); err != nil {
+	if err := t.Conn.revertToSnapshot(snap); err != nil {
 		return fmt.Errorf("revert: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "reverted %s to snapshot %s\n", t.DomName, c.Name)
@@ -1015,12 +1015,12 @@ func (c *LibvirtSnapshotDeleteCmd) Run() error {
 		return err
 	}
 	defer t.Close() //nolint:errcheck
-	snap, err := t.Conn.l.DomainSnapshotLookupByName(t.Domain, c.Name, 0)
+	snap, err := t.Conn.snapshotLookupByName(t.Domain, c.Name)
 	if err != nil {
 		return err
 	}
 	// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings
-	if err := t.Conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags()); err != nil {
+	if err := t.Conn.snapshotDeleteByHandle(snap); err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "deleted snapshot %s of %s\n", c.Name, t.DomName)

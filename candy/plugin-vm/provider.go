@@ -511,7 +511,7 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 		if err != nil {
 			return internalJSON(map[string]any{"error": "domain not found: " + err.Error()})
 		}
-		xmlStr, err := conn.l.DomainGetXMLDesc(dom, 0)
+		xmlStr, err := conn.domainXML(dom, 0)
 		if err != nil {
 			return internalJSON(map[string]any{"error": err.Error()})
 		}
@@ -523,7 +523,7 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 			return internalJSON(map[string]any{"error": err.Error()})
 		}
 		defer conn.Close() //nolint:errcheck
-		doms, _, err := conn.l.ConnectListAllDomains(1, 0)
+		doms, err := conn.listAllDomains(1, 0)
 		if err != nil {
 			return internalJSON(map[string]any{"error": err.Error()})
 		}

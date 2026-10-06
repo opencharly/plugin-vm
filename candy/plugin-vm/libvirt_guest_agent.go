@@ -45,7 +45,7 @@ func (a *GuestAgent) Call(cmd string, args any, out any) error {
 	if err != nil {
 		return fmt.Errorf("marshaling request: %w", err)
 	}
-	rep, err := a.l.QEMUDomainAgentCommand(a.d, string(buf), a.to, 0)
+	rep, err := a.agentCommand(string(buf), 0)
 	if err != nil {
 		return fmt.Errorf("agent call %s: %w", cmd, err)
 	}

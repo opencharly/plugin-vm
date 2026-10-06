@@ -6,6 +6,7 @@ package vm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -35,9 +36,13 @@ import (
 // pragmatic fallback we shell out to `virsh -c qemu:///session
 // screenshot <name>` (uses the C client's stream impl, which is
 // stable) and decode whatever PNG/PPM it writes via image.Decode.
-func captureDomainScreenshot(l *libvirt.Libvirt, dom libvirt.Domain, screen uint) (image.Image, error) {
+//
+// SCREENSHOT is the ONE stream call here: it is bounded via c.screenshot, and its
+// virsh fallback is bounded too (below), so a wedged virtqemud cannot hang the
+// `libvirt screenshot` verb — nor the detached session recorder (plugin-vm#73).
+func (c *libvirtConn) captureDomainScreenshot(dom libvirt.Domain, screen uint) (image.Image, error) {
 	var buf bytes.Buffer
-	mime, err := l.DomainScreenshot(dom, &buf, uint32(screen), 0)
+	mime, err := c.screenshot(dom, &buf, uint32(screen), 0)
 	if err != nil {
 		// Fallback path: virsh screenshot writes PNG/PPM by inspecting
 		// the QEMU return MIME — works on virtio-gpu where go-libvirt's
@@ -159,7 +164,11 @@ func captureDomainScreenshotViaVirsh(domName string) (image.Image, error) {
 	defer func() { releaseTmp(); _ = os.Remove(tmpPath); UnregisterTempCleanup(tmpPath) }()
 	defer os.Remove(filepath.Join(filepath.Dir(tmpPath), "charly-libvirt-screenshot-temp.ppm")) //nolint:errcheck
 
-	cmd := exec.Command("virsh", "-c", "qemu:///session", "screenshot", domName, tmpPath)
+	// BOUNDED: a wedged libvirt makes `virsh screenshot` block forever too, so cap it
+	// at the same class of bound as the RPC it is falling back from (plugin-vm#73).
+	ctx, cancel := context.WithTimeout(context.Background(), screenshotBound)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "virsh", "-c", "qemu:///session", "screenshot", domName, tmpPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("virsh screenshot %s: %w (output: %s)", domName, err, strings.TrimSpace(string(out)))
