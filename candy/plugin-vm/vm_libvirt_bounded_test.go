@@ -117,6 +117,11 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 		// the sibling's wrapper, not this one's).
 		{"domain XML", nil, func() error { _, err := conn.getDomainXML(dom); return err }, true},
 		{"domain define", nil, func() error { return conn.redefineDomain("<domain/>") }, true},
+		// activeDiskPath (the start path's disk-chmod XML read) now routes through
+		// c.getDomainXML; this is its OWN guard (getDomainXML has its own above), so
+		// neither can be dropped unnoticed. Assert return-at-bound only: the bound's
+		// op-name is the shared "domain XML", not this call site's label.
+		{"active disk path", nil, func() error { _, err := conn.activeDiskPath(dom); return err }, false},
 		// ensureDomainSocketDirs is the create/start pre-bind(2) XML read, bounded via
 		// c.getDomainXML; assert only that it RETURNS at the bound (its error is wrapped
 		// as "reading domain XML: …", so the name is the inner op, not this call site).

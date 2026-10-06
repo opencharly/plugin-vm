@@ -334,7 +334,10 @@ func (c *libvirtConn) undefineDomain(dom libvirt.Domain, _ bool) error {
 // <disk device='disk'> source file) from the domain XML. Used by the start op
 // to chmod a snapshot-anchored active disk writable before qemu opens it.
 func (c *libvirtConn) activeDiskPath(dom libvirt.Domain) (string, error) {
-	xmlStr, err := boundedRPCValue("domain XML", teardownRPCBound, func() (string, error) { return rawDomainGetXML(c.l, dom) })
+	// BOUNDED via c.getDomainXML -> rawDomainGetXML (R3: reuse, do not re-inline the
+	// wrapper): the start path reads the domain XML here to chmod a snapshot-anchored
+	// active disk before qemu opens it, so a wedged virtqemud must not hang it.
+	xmlStr, err := c.getDomainXML(dom)
 	if err != nil {
 		return "", fmt.Errorf("reading domain XML: %w", err)
 	}
