@@ -13,11 +13,14 @@ import (
 // are exercised here — listAllDomains, domainInfo, domainXML (read-only), plus
 // listSnapshots, screenshot, and agentCommand (which may legitimately error on a
 // headless/agent-less guest; the point is that each RETURNS bounded). It proves those
-// wrappers do not break the real libvirt calls they enclose. The remaining bounded
-// methods (sendKey, updateDeviceFlags, qmpCommand, and the four MUTATING snapshot RPCs)
-// are NOT driven here — the live test is deliberately non-mutating so it is safe
-// against any running VM — and their bound is proven by the blocking-seam guards in
-// libvirt_bounded_test.go. Skipped without a session / a running charly-* domain.
+// wrappers do not break the real libvirt calls they enclose. The other EIGHT bounded
+// methods are NOT driven here — the live test is deliberately non-mutating so it is
+// safe against any running VM: sendKey, updateDeviceFlags, qmpCommand, and the five
+// snapshot RPCs snapshotCreateXML, snapshotLookupByName, snapshotXMLDesc,
+// revertToSnapshot, snapshotDeleteByHandle (three of which mutate — create/revert/
+// delete; the other two are read-only lookups). Their bound is proven by the
+// blocking-seam guards in libvirt_bounded_test.go. Skipped without a session / a
+// running charly-* domain.
 func TestLibvirtBounded_AgainstLiveDomain(t *testing.T) {
 	if testing.Short() {
 		t.Skip("needs a live libvirt session + a running charly-* domain")
@@ -60,8 +63,8 @@ func TestLibvirtBounded_AgainstLiveDomain(t *testing.T) {
 		t.Fatalf("bounded domainXML returned %d bytes not naming %q", len(xml), dom.Name)
 	}
 
-	// These two may fail legitimately on a headless / agent-less guest; what is under
-	// test is that each RETURNS (bounded), not that it succeeds.
+	// These may fail legitimately on a headless / snapshot-less / agent-less guest;
+	// what is under test is that each RETURNS (bounded), not that it succeeds.
 	if _, err := conn.listSnapshots(dom); err != nil {
 		t.Logf("LIVE listSnapshots returned (bounded) err: %v", err)
 	}
