@@ -118,6 +118,25 @@ func (c *libvirtConn) Close() error {
 	return err
 }
 
+// boundedRPCValue is boundedRPC for a call that returns a value. An on-timeout
+// RPC yields the zero value + the same NAMED error, so a wedged libvirt fails
+// fast instead of blocking forever.
+func boundedRPCValue[T any](op string, d time.Duration, fn func() (T, error)) (T, error) {
+	type res struct {
+		v   T
+		err error
+	}
+	done := make(chan res, 1)
+	go func() { v, err := fn(); done <- res{v, err} }()
+	select {
+	case r := <-done:
+		return r.v, r.err
+	case <-time.After(d):
+		var zero T
+		return zero, fmt.Errorf("%s: libvirt did not respond within %s (a wedged libvirt/qemu; the domain may be left running — re-check with `virsh -c qemu:///session list --all`)", op, d)
+	}
+}
+
 // boundedRPC runs a libvirt RPC (which is context-less in go-libvirt, so it has no
 // request timeout of its own) with a hard wall-clock bound. On timeout it returns a
 // NAMED error WITHOUT waiting for the underlying call: a wedged virtqemud blocks the
@@ -127,25 +146,22 @@ func (c *libvirtConn) Close() error {
 // has already decided to move on; and it cannot deadlock the process, unlike the
 // unbounded call it replaces.
 func boundedRPC(op string, d time.Duration, fn func() error) error {
-	done := make(chan error, 1)
-	go func() { done <- fn() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(d):
-		return fmt.Errorf("%s: libvirt did not respond within %s (a wedged libvirt/qemu; the domain may be left running — re-check with `virsh -c qemu:///session list --all`)", op, d)
-	}
+	_, err := boundedRPCValue(op, d, func() (struct{}, error) { return struct{}{}, fn() })
+	return err
 }
 
 // teardownRPCBound is the wall-clock bound for a single teardown libvirt RPC
-// (destroy / shutdown / undefine / snapshot-delete). Generous enough that a busy
-// virtqemud finishes, small enough that a wedged one fails fast and loudly rather
-// than hanging the whole command.
+// (destroy / shutdown / undefine / snapshot-delete / snapshot-list / lookup).
+// Generous enough that a busy virtqemud finishes, small enough that a wedged one
+// fails fast and loudly rather than hanging the whole command.
 const teardownRPCBound = 30 * time.Second
 
-// lookupDomain finds a domain by name.
+// lookupDomain finds a domain by name (bounded: a wedged virtqemud must not hang
+// destroy — the destroy path looks the domain up first; #800).
 func (c *libvirtConn) lookupDomain(name string) (libvirt.Domain, error) {
-	return c.l.DomainLookupByName(name)
+	return boundedRPCValue("domain lookup", teardownRPCBound, func() (libvirt.Domain, error) {
+		return c.l.DomainLookupByName(name)
+	})
 }
 
 // domainState returns the current state of a domain.

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -32,14 +33,12 @@ func TestBoundedRPC_ReturnsOnTimeout(t *testing.T) {
 }
 
 // TestBoundedRPC_PassesThroughSuccess proves the bound does not alter the fast path:
-// a call that returns promptly yields its own result unchanged.
+// a call that returns promptly yields ITS OWN error unchanged (identity, not merely
+// non-nil).
 func TestBoundedRPC_PassesThroughSuccess(t *testing.T) {
-	want := errBoundedSentinel{}
-	if err := boundedRPC("undefine", time.Second, func() error { return want }); err == nil {
-		t.Fatal("boundedRPC must propagate a fast call's error, got nil")
+	want := errors.New("sentinel")
+	got := boundedRPC("undefine", time.Second, func() error { return want })
+	if got != want {
+		t.Fatalf("boundedRPC must propagate the fast call's OWN error unchanged: got %v, want %v", got, want)
 	}
 }
-
-type errBoundedSentinel struct{}
-
-func (errBoundedSentinel) Error() string { return "sentinel" }
