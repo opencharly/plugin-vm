@@ -54,9 +54,11 @@ func blockingSeams(t *testing.T) {
 
 	od, os_, ou := rawDomainDestroy, rawDomainShutdown, rawDomainUndefine
 	ol, og, on, onm, olk, odel := rawDomainLookup, rawDomainGetState, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
+	oc, ode, ox, oa := rawDomainCreate, rawDomainDefine, rawDomainGetXML, rawDomainAutostart
 	t.Cleanup(func() {
 		rawDomainDestroy, rawDomainShutdown, rawDomainUndefine = od, os_, ou
 		rawDomainLookup, rawDomainGetState, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = ol, og, on, onm, olk, odel
+		rawDomainCreate, rawDomainDefine, rawDomainGetXML, rawDomainAutostart = oc, ode, ox, oa
 	})
 	rawDomainDestroy = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainShutdown = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
@@ -70,6 +72,10 @@ func blockingSeams(t *testing.T) {
 		return libvirt.DomainSnapshot{}, nil
 	}
 	rawSnapshotDelete = func(*libvirt.Libvirt, libvirt.DomainSnapshot) error { <-block; return nil }
+	rawDomainCreate = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
+	rawDomainDefine = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { <-block; return libvirt.Domain{}, nil }
+	rawDomainGetXML = func(*libvirt.Libvirt, libvirt.Domain) (string, error) { <-block; return "", nil }
+	rawDomainAutostart = func(*libvirt.Libvirt, libvirt.Domain, int32) error { <-block; return nil }
 }
 
 // TestTeardownCallSitesAreBounded drives the REAL teardown methods (not boundedRPC in
@@ -78,7 +84,6 @@ func blockingSeams(t *testing.T) {
 // directly, the corresponding subtest hangs (the bound is what turns the wedge into a
 // return), so this fails exactly when the wrapper is missing at the call site.
 func TestTeardownCallSitesAreBounded(t *testing.T) {
-	blockingSeams(t)
 	oldBound := teardownRPCBound
 	teardownRPCBound = 150 * time.Millisecond
 	t.Cleanup(func() { teardownRPCBound = oldBound })
@@ -89,24 +94,47 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 
 	cases := []struct {
 		label  string
+		prereq func() // releases a sibling seam the method calls BEFORE the one under test
 		run    func() error
 		namedE bool // true when the call site surfaces a NAMED bounded error (leg swallows → false)
 	}{
-		{"force destroy", func() error { return conn.destroyDomain(dom) }, true},
-		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }, true},
-		{"undefine", func() error { return conn.undefineDomain(dom, false) }, true},
-		{"domain lookup", func() error { _, err := conn.lookupDomain("x"); return err }, true},
-		{"domain state", func() error { _, err := conn.domainState(dom); return err }, true},
+		{"force destroy", nil, func() error { return conn.destroyDomain(dom) }, true},
+		{"graceful shutdown", nil, func() error { return conn.shutdownDomain(dom) }, true},
+		{"undefine", nil, func() error { return conn.undefineDomain(dom, false) }, true},
+		{"domain lookup", nil, func() error { _, err := conn.lookupDomain("x"); return err }, true},
+		{"domain state", nil, func() error { _, err := conn.domainState(dom); return err }, true},
 		// Each snapshot-leg RPC is its own bounded method -> its own guard. Driving each
 		// directly proves the wrapper at EACH (the old leg-level test short-circuited on the
 		// first timeout and never reached the inner RPCs).
-		{"snapshot list", func() error { _, err := conn.snapshotNum(dom); return err }, true},
-		{"snapshot names", func() error { _, err := conn.snapshotNames(dom, 3); return err }, true},
-		{"snapshot lookup", func() error { _, err := conn.snapshotLookup(dom, "s"); return err }, true},
-		{"snapshot delete", func() error { return conn.snapshotDelete(libvirt.DomainSnapshot{}) }, true},
+		{"snapshot list", nil, func() error { _, err := conn.snapshotNum(dom); return err }, true},
+		{"snapshot names", nil, func() error { _, err := conn.snapshotNames(dom, 3); return err }, true},
+		{"snapshot lookup", nil, func() error { _, err := conn.snapshotLookup(dom, "s"); return err }, true},
+		{"snapshot delete", nil, func() error { return conn.snapshotDelete(libvirt.DomainSnapshot{}) }, true},
+		// The create/define/XML/autostart group (R2 completion, c7c8119). Their methods
+		// pre-call a SIBLING seam — startDomain reads the domain XML for socket dirs, and
+		// setDomainAutostart looks the domain up first — so prereq releases THAT seam so
+		// the call site UNDER TEST is actually reached (otherwise the guard would prove
+		// the sibling's wrapper, not this one's).
+		{"domain XML", nil, func() error { _, err := conn.getDomainXML(dom); return err }, true},
+		{"domain define", nil, func() error { return conn.redefineDomain("<domain/>") }, true},
+		// ensureDomainSocketDirs is the create/start pre-bind(2) XML read, bounded via
+		// c.getDomainXML; assert only that it RETURNS at the bound (its error is wrapped
+		// as "reading domain XML: …", so the name is the inner op, not this call site).
+		{"socket dirs", nil, func() error { return conn.ensureDomainSocketDirs(dom) }, false},
+		{"domain create", func() {
+			rawDomainGetXML = func(*libvirt.Libvirt, libvirt.Domain) (string, error) { return "<domain/>", nil }
+		}, func() error { return conn.startDomain(dom) }, true},
+		{"domain autostart", func() {
+			rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+		}, func() error { return conn.setDomainAutostart("x", true) }, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
+			// Isolate per subtest: a prereq override must not leak into a later case.
+			blockingSeams(t)
+			if tc.prereq != nil {
+				tc.prereq()
+			}
 			done := make(chan error, 1)
 			go func() { done <- tc.run() }()
 			select {

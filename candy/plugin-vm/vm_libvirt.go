@@ -186,7 +186,7 @@ func (c *libvirtConn) domainState(dom libvirt.Domain) (libvirt.DomainState, erro
 // in time for the QEMU bind(2) call, and QEMU fails with
 // "bind: No such file or directory". Pre-creating is idempotent.
 func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
-	if err := ensureDomainSocketDirs(c.l, dom); err != nil {
+	if err := c.ensureDomainSocketDirs(dom); err != nil {
 		return fmt.Errorf("preparing socket dirs: %w", err)
 	}
 	return boundedRPC("domain create", teardownRPCBound, func() error { return rawDomainCreate(c.l, dom) })
@@ -353,7 +353,7 @@ func (c *libvirtConn) defineAndStartDomain(xmlStr, domainName string) error {
 	// and undefine-by-recorded-uuid then misses it. Undefine by NAME first so every
 	// create — and every disposable-bed `charly update` re-run — self-heals.
 	if domainName != "" {
-		if existing, err := rawDomainLookup(c.l, domainName); err == nil {
+		if existing, err := c.lookupDomain(domainName); err == nil {
 			if s, serr := c.domainState(existing); serr == nil && s != libvirt.DomainShutoff {
 				_ = c.destroyDomain(existing)
 			}
@@ -364,7 +364,7 @@ func (c *libvirtConn) defineAndStartDomain(xmlStr, domainName string) error {
 	if err != nil {
 		return fmt.Errorf("defining domain: %w", err)
 	}
-	if err := ensureDomainSocketDirs(c.l, dom); err != nil {
+	if err := c.ensureDomainSocketDirs(dom); err != nil {
 		return fmt.Errorf("preparing socket dirs: %w", err)
 	}
 	if err := boundedRPC("domain create", teardownRPCBound, func() error { return rawDomainCreate(c.l, dom) }); err != nil {
@@ -383,8 +383,10 @@ func (c *libvirtConn) defineAndStartDomain(xmlStr, domainName string) error {
 // `~/.config/libvirt/qemu/lib/domain-<id>-<name>/` before handing
 // off to QEMU, which then fails bind(2) on the SPICE socket. We
 // shoulder that responsibility here.
-func ensureDomainSocketDirs(l *libvirt.Libvirt, dom libvirt.Domain) error {
-	xmlStr, err := l.DomainGetXMLDesc(dom, 0)
+func (c *libvirtConn) ensureDomainSocketDirs(dom libvirt.Domain) error {
+	// BOUNDED via c.getDomainXML -> rawDomainGetXML: a wedged virtqemud must not hang
+	// create/start at this pre-bind(2) XML read (the same class as the teardown bounds).
+	xmlStr, err := c.getDomainXML(dom)
 	if err != nil {
 		return fmt.Errorf("reading domain XML: %w", err)
 	}
