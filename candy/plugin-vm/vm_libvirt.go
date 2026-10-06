@@ -189,7 +189,7 @@ func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
 	if err := c.ensureDomainSocketDirs(dom); err != nil {
 		return fmt.Errorf("preparing socket dirs: %w", err)
 	}
-	return boundedRPC("domain create", teardownRPCBound, func() error { return rawDomainCreate(c.l, dom) })
+	return c.createDomain(dom)
 }
 
 // Teardown RPC seams: package vars so a test can substitute a BLOCKING raw call and
@@ -363,14 +363,14 @@ func (c *libvirtConn) defineAndStartDomain(xmlStr, domainName string) error {
 			_ = c.undefineDomain(existing, false)
 		}
 	}
-	dom, err := boundedRPCValue("domain define", teardownRPCBound, func() (libvirt.Domain, error) { return rawDomainDefine(c.l, xmlStr) })
+	dom, err := c.defineDomain(xmlStr)
 	if err != nil {
 		return fmt.Errorf("defining domain: %w", err)
 	}
 	if err := c.ensureDomainSocketDirs(dom); err != nil {
 		return fmt.Errorf("preparing socket dirs: %w", err)
 	}
-	if err := boundedRPC("domain create", teardownRPCBound, func() error { return rawDomainCreate(c.l, dom) }); err != nil {
+	if err := c.createDomain(dom); err != nil {
 		return fmt.Errorf("starting domain: %w", err)
 	}
 	return nil
@@ -498,9 +498,21 @@ func (c *libvirtConn) getDomainXML(dom libvirt.Domain) (string, error) {
 	return boundedRPCValue("domain XML", teardownRPCBound, func() (string, error) { return rawDomainGetXML(c.l, dom) })
 }
 
-// redefineDomain redefines a domain from XML string.
+// defineDomain defines a domain from XML string. BOUNDED, and the ONE wrapper for
+// rawDomainDefine (R3): shared by defineAndStartDomain and redefineDomain.
+func (c *libvirtConn) defineDomain(xmlStr string) (libvirt.Domain, error) {
+	return boundedRPCValue("domain define", teardownRPCBound, func() (libvirt.Domain, error) { return rawDomainDefine(c.l, xmlStr) })
+}
+
+// createDomain starts a DEFINED domain. BOUNDED, and the ONE wrapper for
+// rawDomainCreate (R3): shared by startDomain and defineAndStartDomain.
+func (c *libvirtConn) createDomain(dom libvirt.Domain) error {
+	return boundedRPC("domain create", teardownRPCBound, func() error { return rawDomainCreate(c.l, dom) })
+}
+
+// redefineDomain redefines a domain.
 func (c *libvirtConn) redefineDomain(xmlStr string) error {
-	_, err := boundedRPCValue("domain define", teardownRPCBound, func() (libvirt.Domain, error) { return rawDomainDefine(c.l, xmlStr) })
+	_, err := c.defineDomain(xmlStr)
 	return err
 }
 
