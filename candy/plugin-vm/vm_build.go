@@ -243,7 +243,7 @@ func pruneAfterVmBuild() {
 		return
 	}
 	keep, _ := loaderkit.ResolveRetentionDefaultsViaExecutor(cmdCtx, cmdExec, dir)
-	reqJSON, jerr := json.Marshal(spec.RetentionRequest{Dir: dir, BuildPrune: true, KeepImages: keep})
+	reqJSON, jerr := vmBoxPruneRequestJSON(dir, keep)
 	if jerr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: VM box retention prune: %v\n", jerr)
 		return
@@ -263,4 +263,11 @@ func pruneAfterVmBuild() {
 	if len(reply.ImageRefs) > 0 {
 		fmt.Fprintf(os.Stderr, "Pruned %d old VM box tag(s) (keep_images=%d)\n", len(reply.ImageRefs), keep)
 	}
+}
+
+// vmBoxPruneRequestJSON is the PURE half of pruneAfterVmBuild — the retention request
+// it sends (BuildPrune scope, the resolved keep_images, the project dir). Split out so
+// the request the prune actually issues is unit-testable with no reverse channel.
+func vmBoxPruneRequestJSON(dir string, keep int) ([]byte, error) {
+	return json.Marshal(spec.RetentionRequest{Dir: dir, BuildPrune: true, KeepImages: keep})
 }
