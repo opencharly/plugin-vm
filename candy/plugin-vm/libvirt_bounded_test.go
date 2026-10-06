@@ -146,8 +146,9 @@ func TestLibvirtVerbCallSitesAreBounded(t *testing.T) {
 	}
 }
 
-// errFrameSource is a frameSource stub: failAlways errors on every poll; okThenFail
-// returns a valid 1x1 image on every poll (used to exercise the writer path).
+// errFrameSource is a frameSource stub whose Screenshot always errors (the
+// wedged-stream shape); okFrameSource always returns a valid 1x1 image (the healthy
+// shape, used to exercise the writer path).
 type errFrameSource struct{ err error }
 
 func (s errFrameSource) Screenshot() (image.Image, error) { return nil, s.err }

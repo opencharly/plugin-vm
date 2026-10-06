@@ -191,15 +191,9 @@ func captureInterval(fps int) time.Duration {
 	return d
 }
 
-// writeFrames polls the framebuffer source at interval, appending each frame as a
-// JPEG onto w until done closes. Video semantics identical to the record loop:
-// every poll is one frame of the stream (a full DomainScreenshot per frame; a
-// poll that errors is skipped — a broken display just stops appending). Returns
-// the frame count, and a writer error (the output file failing mid-recording is
-// a real failure, not a skipped frame).
-//
-// WRITER-FAILED is a distinct sentinel (plugin-vm#73): it tells captureSession the
-// stop was a real output failure (surface it, do not finalize as a clean recording).
+// errRecorderWriterFailed is a distinct sentinel (plugin-vm#73): it tells
+// captureSession the stop was a real output failure (surface it, do not finalize as
+// a clean recording), as opposed to a display/daemon stop.
 var errRecorderWriterFailed = errors.New("recorder: frame writer failed")
 
 // recorderConsecutiveFailLimit is how many CONSECUTIVE Screenshot failures end the
@@ -209,6 +203,15 @@ var errRecorderWriterFailed = errors.New("recorder: frame writer failed")
 // and surfaces it. A var so the guard test can lower it.
 var recorderConsecutiveFailLimit = 5
 
+// writeFrames polls the framebuffer source at interval, appending each frame as a
+// JPEG onto w until done closes. Video semantics identical to the record loop:
+// every poll is one frame of the stream (a full DomainScreenshot per frame). A SINGLE
+// poll error is skipped (a transient glitch just misses one frame), but
+// recorderConsecutiveFailLimit consecutive failures STOP the recording and return the
+// last error — under the bounded screenshot (plugin-vm#73) a run of them means a wedged
+// daemon, and continuing would abandon a blocked goroutine per poll. Returns the frame
+// count and, on a real writer failure (the output file failing mid-recording, wrapped
+// as errRecorderWriterFailed), that error.
 func writeFrames(s frameSource, interval time.Duration, w io.Writer, done <-chan struct{}) (int, error) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()

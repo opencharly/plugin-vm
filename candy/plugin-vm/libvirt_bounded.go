@@ -17,10 +17,13 @@ package vm
 // interactive probes with no teardown deadline of their own, so they share the
 // generous teardownRPCBound via libvirtProbeBound (a var, so a test can lower it).
 //
-// NOT here: DomainScreenshot. It is a go-libvirt STREAM call, and a per-call
-// bounded wrapper would leak one blocked goroutine every frame in the
-// session-recorder's poll loop; it is handled separately in the recorder's frame
-// path (recorder.go).
+// DomainScreenshot IS bounded here (the `screenshot` method) — but at its OWN
+// screenshotBound, deliberately smaller than the recorder's frame interval. Because
+// it is a go-libvirt STREAM call, each timeout abandons one blocked goroutine, so a
+// wedged daemon must not be re-polled frame after frame; the recorder's frame path
+// (recorder.go) provides that half — writeFrames stops after
+// recorderConsecutiveFailLimit consecutive screenshot failures instead of polling
+// forever.
 
 import (
 	"io"
