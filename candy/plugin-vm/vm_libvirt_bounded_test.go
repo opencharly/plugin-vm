@@ -127,6 +127,17 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 		{"domain autostart", func() {
 			rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
 		}, func() error { return conn.setDomainAutostart("x", true) }, true},
+		// The defineAndStartDomain RECONCILE call site itself (finding 1): release every
+		// sibling seam so ONLY the leftover lookup can block, then drive the method. If
+		// that call site ever drops `c.lookupDomain` for a bare `rawDomainLookup`, the
+		// wedge is reached unbounded and this hangs → fails at the bound. A clean return
+		// (the lookup's bounded error is swallowed by the `err == nil` guard, then define
+		// + create succeed) is the pass.
+		{"define and start reconcile", func() {
+			rawDomainDefine = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { return libvirt.Domain{}, nil }
+			rawDomainGetXML = func(*libvirt.Libvirt, libvirt.Domain) (string, error) { return "<domain/>", nil }
+			rawDomainCreate = func(*libvirt.Libvirt, libvirt.Domain) error { return nil }
+		}, func() error { return conn.defineAndStartDomain("<domain/>", "x") }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
