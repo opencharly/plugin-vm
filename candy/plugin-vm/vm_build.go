@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/opencharly/sdk"
 	"github.com/opencharly/sdk/kit"
+	"github.com/opencharly/sdk/loaderkit"
 	"github.com/opencharly/spec/spec"
 )
 
@@ -221,5 +223,51 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) er
 	} else {
 		fmt.Fprintf(os.Stderr, "Wrote VM box %s\n", ref)
 	}
+	pruneAfterVmBuild()
 	return nil
+}
+
+// pruneAfterVmBuild runs the SAME post-build retention prune plugin-box's box build runs
+// (verb:retention, BuildPrune scope: per-run CalVer tag retention + stale .build staging
+// dirs), so `charly vm build` does not leak its emitted box tags. Without it, the
+// `localhost/<box>:<CalVer>` tags grow unbounded (measured: 24 tags of one bed box;
+// opencharly/charly#808). Best-effort, warn-only — the disk build is the primary artifact,
+// the box is its metadata wrapper. Mirrors candy/plugin-box's pruneAfterBuild (R3: the ONE
+// verb:retention engine, reached the SAME peer-dispatch way).
+func pruneAfterVmBuild() {
+	if cmdExec == nil {
+		return // no reverse channel (out-of-process placement) — nothing to prune through
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	keep, _ := loaderkit.ResolveRetentionDefaultsViaExecutor(cmdCtx, cmdExec, dir)
+	reqJSON, jerr := vmBoxPruneRequestJSON(dir, keep)
+	if jerr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: VM box retention prune: %v\n", jerr)
+		return
+	}
+	resJSON, ierr := cmdExec.InvokeProvider(cmdCtx, "verb", "retention", sdk.OpRun, reqJSON, nil, sdk.InvokeProviderOpts{})
+	if ierr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: VM box retention prune: %v\n", ierr)
+		return
+	}
+	var reply spec.RetentionReply
+	if len(resJSON) > 0 {
+		if uerr := json.Unmarshal(resJSON, &reply); uerr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: VM box retention prune: %v\n", uerr)
+			return
+		}
+	}
+	if len(reply.ImageRefs) > 0 {
+		fmt.Fprintf(os.Stderr, "Pruned %d old VM box tag(s) (keep_images=%d)\n", len(reply.ImageRefs), keep)
+	}
+}
+
+// vmBoxPruneRequestJSON is the PURE half of pruneAfterVmBuild — the retention request
+// it sends (BuildPrune scope, the resolved keep_images, the project dir). Split out so
+// the request the prune actually issues is unit-testable with no reverse channel.
+func vmBoxPruneRequestJSON(dir string, keep int) ([]byte, error) {
+	return json.Marshal(spec.RetentionRequest{Dir: dir, BuildPrune: true, KeepImages: keep})
 }
