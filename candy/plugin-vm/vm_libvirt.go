@@ -118,6 +118,31 @@ func (c *libvirtConn) Close() error {
 	return err
 }
 
+// boundedRPC runs a libvirt RPC (which is context-less in go-libvirt, so it has no
+// request timeout of its own) with a hard wall-clock bound. On timeout it returns a
+// NAMED error WITHOUT waiting for the underlying call: a wedged virtqemud blocks the
+// call forever, and waiting for it is exactly the hang this closes (a `charly vm
+// destroy` that never returned and resisted SIGTERM — opencharly/charly#800). The
+// abandoned goroutine is harmless: the process is exiting (teardown) or the caller
+// has already decided to move on; and it cannot deadlock the process, unlike the
+// unbounded call it replaces.
+func boundedRPC(op string, d time.Duration, fn func() error) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		return fmt.Errorf("%s: libvirt did not respond within %s (a wedged libvirt/qemu; the domain may be left running — re-check with `virsh -c qemu:///session list --all`)", op, d)
+	}
+}
+
+// teardownRPCBound is the wall-clock bound for a single teardown libvirt RPC
+// (destroy / shutdown / undefine / snapshot-delete). Generous enough that a busy
+// virtqemud finishes, small enough that a wedged one fails fast and loudly rather
+// than hanging the whole command.
+const teardownRPCBound = 30 * time.Second
+
 // lookupDomain finds a domain by name.
 func (c *libvirtConn) lookupDomain(name string) (libvirt.Domain, error) {
 	return c.l.DomainLookupByName(name)
@@ -147,12 +172,12 @@ func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
 
 // shutdownDomain requests a graceful shutdown.
 func (c *libvirtConn) shutdownDomain(dom libvirt.Domain) error {
-	return c.l.DomainShutdown(dom)
+	return boundedRPC("graceful shutdown", teardownRPCBound, func() error { return c.l.DomainShutdown(dom) })
 }
 
 // destroyDomain forces immediate stop.
 func (c *libvirtConn) destroyDomain(dom libvirt.Domain) error {
-	return c.l.DomainDestroy(dom)
+	return boundedRPC("force destroy", teardownRPCBound, func() error { return c.l.DomainDestroy(dom) })
 }
 
 // gracefulStopDomain requests an ACPI/agent shutdown and waits (up to the
@@ -207,7 +232,9 @@ func (c *libvirtConn) gracefulStopDomain(dom libvirt.Domain) {
 // managed-saves every running domain across a host reboot. Without the flag, a VM that
 // was running when the host rebooted becomes unremovable by every charly cleanup path.
 func (c *libvirtConn) undefineDomain(dom libvirt.Domain, _ bool) error {
-	return c.l.DomainUndefineFlags(dom, libvirt.DomainUndefineNvram|libvirt.DomainUndefineManagedSave)
+	return boundedRPC("undefine", teardownRPCBound, func() error {
+		return c.l.DomainUndefineFlags(dom, libvirt.DomainUndefineNvram|libvirt.DomainUndefineManagedSave)
+	})
 }
 
 // activeDiskPath returns the VM's active disk path (the first

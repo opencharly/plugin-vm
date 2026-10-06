@@ -426,8 +426,11 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 				if names, lerr := conn.l.DomainSnapshotListNames(dom, n, 0); lerr == nil {
 					for _, name := range names {
 						if snap, serr := conn.l.DomainSnapshotLookupByName(dom, name, 0); serr == nil {
-							// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings
-							_ = conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags())
+							// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings.
+							// Bounded like the other teardown RPCs: a wedged virtqemud must not hang destroy (#800).
+							_ = boundedRPC("snapshot delete", teardownRPCBound, func() error {
+								return conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags())
+							})
 						}
 					}
 				}
