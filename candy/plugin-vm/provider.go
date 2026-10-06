@@ -422,14 +422,14 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 			// a golden snapshot on the bed's domain; teardown must remove the
 			// libvirt snapshot records before undefine. The registry-side snapshot
 			// dirs are removed by the caller's disk cleanup (--disk).
-			if n, nerr := boundedRPCValue("snapshot list", teardownRPCBound, func() (int32, error) { return conn.l.DomainSnapshotNum(dom, 0) }); nerr == nil && n > 0 {
-				if names, lerr := boundedRPCValue("snapshot names", teardownRPCBound, func() ([]string, error) { return conn.l.DomainSnapshotListNames(dom, n, 0) }); lerr == nil {
+			if n, nerr := boundedRPCValue("snapshot list", teardownRPCBound, func() (int32, error) { return rawSnapshotNum(conn.l, dom) }); nerr == nil && n > 0 {
+				if names, lerr := boundedRPCValue("snapshot names", teardownRPCBound, func() ([]string, error) { return rawSnapshotNames(conn.l, dom, n) }); lerr == nil {
 					for _, name := range names {
-						if snap, serr := boundedRPCValue("snapshot lookup", teardownRPCBound, func() (libvirt.DomainSnapshot, error) { return conn.l.DomainSnapshotLookupByName(dom, name, 0) }); serr == nil {
+						if snap, serr := boundedRPCValue("snapshot lookup", teardownRPCBound, func() (libvirt.DomainSnapshot, error) { return rawSnapshotLookup(conn.l, dom, name) }); serr == nil {
 							// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings.
 							// Bounded like the other teardown RPCs: a wedged virtqemud must not hang destroy (#800).
 							_ = boundedRPC("snapshot delete", teardownRPCBound, func() error {
-								return conn.l.DomainSnapshotDelete(snap, snapshotDeleteFlags())
+								return rawSnapshotDelete(conn.l, snap)
 							})
 						}
 					}

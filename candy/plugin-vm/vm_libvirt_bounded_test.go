@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/digitalocean/go-libvirt"
 )
 
 // TestBoundedRPC_ReturnsOnTimeout is the regression guard for opencharly/charly#800:
@@ -40,5 +42,69 @@ func TestBoundedRPC_PassesThroughSuccess(t *testing.T) {
 	got := boundedRPC("undefine", time.Second, func() error { return want })
 	if got != want {
 		t.Fatalf("boundedRPC must propagate the fast call's OWN error unchanged: got %v, want %v", got, want)
+	}
+}
+
+// blockingSeams swaps every teardown raw seam for a call that blocks forever — the
+// wedged-virtqemud shape — and restores them on cleanup.
+func blockingSeams(t *testing.T) {
+	t.Helper()
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+
+	od, os_, ou := rawDomainDestroy, rawDomainShutdown, rawDomainUndefine
+	on, onm, ol, odel := rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
+	t.Cleanup(func() {
+		rawDomainDestroy, rawDomainShutdown, rawDomainUndefine = od, os_, ou
+		rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = on, onm, ol, odel
+	})
+	rawDomainDestroy = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
+	rawDomainShutdown = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
+	rawDomainUndefine = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
+	rawSnapshotNum = func(*libvirt.Libvirt, libvirt.Domain) (int32, error) { <-block; return 0, nil }
+	rawSnapshotNames = func(*libvirt.Libvirt, libvirt.Domain, int32) ([]string, error) { <-block; return nil, nil }
+	rawSnapshotLookup = func(*libvirt.Libvirt, libvirt.Domain, string) (libvirt.DomainSnapshot, error) {
+		<-block
+		return libvirt.DomainSnapshot{}, nil
+	}
+	rawSnapshotDelete = func(*libvirt.Libvirt, libvirt.DomainSnapshot) error { <-block; return nil }
+}
+
+// TestTeardownCallSitesAreBounded drives the REAL teardown methods (not boundedRPC in
+// isolation) with every raw libvirt seam blocking forever. Each must return at the bound
+// with a NAMED error. If a call site ever drops its boundedRPC wrapper and calls its seam
+// directly, the corresponding subtest hangs (the bound is what turns the wedge into a
+// return), so this fails exactly when the wrapper is missing at the call site.
+func TestTeardownCallSitesAreBounded(t *testing.T) {
+	blockingSeams(t)
+	oldBound := teardownRPCBound
+	teardownRPCBound = 150 * time.Millisecond
+	t.Cleanup(func() { teardownRPCBound = oldBound })
+
+	conn := &libvirtConn{} // seams ignore l; the methods must not need a live connection
+	dom := libvirt.Domain{}
+	bound := 3 * time.Second
+
+	cases := []struct {
+		label string
+		run   func() error
+	}{
+		{"force destroy", func() error { return conn.destroyDomain(dom) }},
+		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }},
+		{"undefine", func() error { return conn.undefineDomain(dom, false) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() { done <- tc.run() }()
+			select {
+			case err := <-done:
+				if err == nil || !strings.Contains(err.Error(), tc.label) {
+					t.Fatalf("%s call site must return a NAMED bounded error, got %v", tc.label, err)
+				}
+			case <-time.After(bound):
+				t.Fatalf("%s call site did NOT return at the bound — the boundedRPC wrapper is missing at the call site", tc.label)
+			}
+		})
 	}
 }

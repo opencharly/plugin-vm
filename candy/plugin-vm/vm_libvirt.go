@@ -153,8 +153,9 @@ func boundedRPC(op string, d time.Duration, fn func() error) error {
 // teardownRPCBound is the wall-clock bound for a single teardown libvirt RPC
 // (destroy / shutdown / undefine / snapshot-delete / snapshot-list / lookup).
 // Generous enough that a busy virtqemud finishes, small enough that a wedged one
-// fails fast and loudly rather than hanging the whole command.
-const teardownRPCBound = 30 * time.Second
+// fails fast and loudly rather than hanging the whole command. A VAR (not a const)
+// so the call-site regression test can lower it and assert the bound in milliseconds.
+var teardownRPCBound = 30 * time.Second
 
 // lookupDomain finds a domain by name (bounded: a wedged virtqemud must not hang
 // destroy — the destroy path looks the domain up first; #800).
@@ -186,14 +187,35 @@ func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
 	return c.l.DomainCreate(dom)
 }
 
+// Teardown RPC seams: package vars so a test can substitute a BLOCKING raw call and
+// prove the CALL SITE (not merely boundedRPC in isolation) returns at the bound. Each
+// defaults to the real go-libvirt method.
+var (
+	rawDomainShutdown = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainShutdown(d) }
+	rawDomainDestroy  = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainDestroy(d) }
+	rawDomainUndefine = func(l *libvirt.Libvirt, d libvirt.Domain) error {
+		return l.DomainUndefineFlags(d, libvirt.DomainUndefineNvram|libvirt.DomainUndefineManagedSave)
+	}
+	rawSnapshotNum   = func(l *libvirt.Libvirt, d libvirt.Domain) (int32, error) { return l.DomainSnapshotNum(d, 0) }
+	rawSnapshotNames = func(l *libvirt.Libvirt, d libvirt.Domain, n int32) ([]string, error) {
+		return l.DomainSnapshotListNames(d, n, 0)
+	}
+	rawSnapshotLookup = func(l *libvirt.Libvirt, d libvirt.Domain, name string) (libvirt.DomainSnapshot, error) {
+		return l.DomainSnapshotLookupByName(d, name, 0)
+	}
+	rawSnapshotDelete = func(l *libvirt.Libvirt, s libvirt.DomainSnapshot) error {
+		return l.DomainSnapshotDelete(s, snapshotDeleteFlags())
+	}
+)
+
 // shutdownDomain requests a graceful shutdown.
 func (c *libvirtConn) shutdownDomain(dom libvirt.Domain) error {
-	return boundedRPC("graceful shutdown", teardownRPCBound, func() error { return c.l.DomainShutdown(dom) })
+	return boundedRPC("graceful shutdown", teardownRPCBound, func() error { return rawDomainShutdown(c.l, dom) })
 }
 
 // destroyDomain forces immediate stop.
 func (c *libvirtConn) destroyDomain(dom libvirt.Domain) error {
-	return boundedRPC("force destroy", teardownRPCBound, func() error { return c.l.DomainDestroy(dom) })
+	return boundedRPC("force destroy", teardownRPCBound, func() error { return rawDomainDestroy(c.l, dom) })
 }
 
 // gracefulStopDomain requests an ACPI/agent shutdown and waits (up to the
@@ -248,9 +270,7 @@ func (c *libvirtConn) gracefulStopDomain(dom libvirt.Domain) {
 // managed-saves every running domain across a host reboot. Without the flag, a VM that
 // was running when the host rebooted becomes unremovable by every charly cleanup path.
 func (c *libvirtConn) undefineDomain(dom libvirt.Domain, _ bool) error {
-	return boundedRPC("undefine", teardownRPCBound, func() error {
-		return c.l.DomainUndefineFlags(dom, libvirt.DomainUndefineNvram|libvirt.DomainUndefineManagedSave)
-	})
+	return boundedRPC("undefine", teardownRPCBound, func() error { return rawDomainUndefine(c.l, dom) })
 }
 
 // activeDiskPath returns the VM's active disk path (the first
