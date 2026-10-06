@@ -539,7 +539,7 @@ func (c *libvirtConn) setDomainAutostart(name string, on bool) error {
 // listCharlyDomains returns all domains with the "charly-" prefix.
 func (c *libvirtConn) listCharlyDomains() ([]domainInfo, error) {
 	flags := libvirt.ConnectListDomainsActive | libvirt.ConnectListDomainsInactive
-	domains, _, err := c.l.ConnectListAllDomains(1, flags)
+	domains, err := c.listAllDomains(1, flags)
 	if err != nil {
 		return nil, err
 	}

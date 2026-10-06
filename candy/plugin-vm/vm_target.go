@@ -286,7 +286,7 @@ func (t *VmTarget) AgentReachable(timeout time.Duration) bool {
 	}
 	// go-libvirt exposes QEMUDomainAgentCommand which talks to QGA.
 	// Timeout is in seconds (int32).
-	_, err = t.Conn.l.QEMUDomainAgentCommand(t.Domain, string(buf), int32(timeout.Seconds()), 0)
+	_, err = agentCommand(t.Conn.l, t.Domain, string(buf), int32(timeout.Seconds()), 0)
 	return err == nil
 }
 
