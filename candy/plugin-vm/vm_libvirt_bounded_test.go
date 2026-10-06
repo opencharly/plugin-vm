@@ -53,14 +53,15 @@ func blockingSeams(t *testing.T) {
 	t.Cleanup(func() { close(block) })
 
 	od, os_, ou := rawDomainDestroy, rawDomainShutdown, rawDomainUndefine
-	on, onm, ol, odel := rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
+	ol, on, onm, olk, odel := rawDomainLookup, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete
 	t.Cleanup(func() {
 		rawDomainDestroy, rawDomainShutdown, rawDomainUndefine = od, os_, ou
-		rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = on, onm, ol, odel
+		rawDomainLookup, rawSnapshotNum, rawSnapshotNames, rawSnapshotLookup, rawSnapshotDelete = ol, on, onm, olk, odel
 	})
 	rawDomainDestroy = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainShutdown = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
 	rawDomainUndefine = func(*libvirt.Libvirt, libvirt.Domain) error { <-block; return nil }
+	rawDomainLookup = func(*libvirt.Libvirt, string) (libvirt.Domain, error) { <-block; return libvirt.Domain{}, nil }
 	rawSnapshotNum = func(*libvirt.Libvirt, libvirt.Domain) (int32, error) { <-block; return 0, nil }
 	rawSnapshotNames = func(*libvirt.Libvirt, libvirt.Domain, int32) ([]string, error) { <-block; return nil, nil }
 	rawSnapshotLookup = func(*libvirt.Libvirt, libvirt.Domain, string) (libvirt.DomainSnapshot, error) {
@@ -86,12 +87,19 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 	bound := 3 * time.Second
 
 	cases := []struct {
-		label string
-		run   func() error
+		label  string
+		run    func() error
+		namedE bool // true when the call site surfaces a NAMED bounded error (leg swallows → false)
 	}{
-		{"force destroy", func() error { return conn.destroyDomain(dom) }},
-		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }},
-		{"undefine", func() error { return conn.undefineDomain(dom, false) }},
+		{"force destroy", func() error { return conn.destroyDomain(dom) }, true},
+		{"graceful shutdown", func() error { return conn.shutdownDomain(dom) }, true},
+		{"undefine", func() error { return conn.undefineDomain(dom, false) }, true},
+		{"domain lookup", func() error { _, err := conn.lookupDomain("x"); return err }, true},
+		// removeDomainSnapshots swallows per-RPC errors (best-effort teardown), so the bound is
+		// proven by the leg RETURNING: with every raw snapshot seam blocking forever, an
+		// unbounded site inside the leg would hang this subtest. The named-error path is the
+		// same boundedRPCValue seam the "domain lookup" case already proves.
+		{"snapshot leg", func() error { conn.removeDomainSnapshots(dom); return nil }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -99,7 +107,7 @@ func TestTeardownCallSitesAreBounded(t *testing.T) {
 			go func() { done <- tc.run() }()
 			select {
 			case err := <-done:
-				if err == nil || !strings.Contains(err.Error(), tc.label) {
+				if tc.namedE && (err == nil || !strings.Contains(err.Error(), tc.label)) {
 					t.Fatalf("%s call site must return a NAMED bounded error, got %v", tc.label, err)
 				}
 			case <-time.After(bound):

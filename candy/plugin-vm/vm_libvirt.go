@@ -161,7 +161,7 @@ var teardownRPCBound = 30 * time.Second
 // destroy — the destroy path looks the domain up first; #800).
 func (c *libvirtConn) lookupDomain(name string) (libvirt.Domain, error) {
 	return boundedRPCValue("domain lookup", teardownRPCBound, func() (libvirt.Domain, error) {
-		return c.l.DomainLookupByName(name)
+		return rawDomainLookup(c.l, name)
 	})
 }
 
@@ -191,6 +191,7 @@ func (c *libvirtConn) startDomain(dom libvirt.Domain) error {
 // prove the CALL SITE (not merely boundedRPC in isolation) returns at the bound. Each
 // defaults to the real go-libvirt method.
 var (
+	rawDomainLookup   = func(l *libvirt.Libvirt, name string) (libvirt.Domain, error) { return l.DomainLookupByName(name) }
 	rawDomainShutdown = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainShutdown(d) }
 	rawDomainDestroy  = func(l *libvirt.Libvirt, d libvirt.Domain) error { return l.DomainDestroy(d) }
 	rawDomainUndefine = func(l *libvirt.Libvirt, d libvirt.Domain) error {
@@ -207,6 +208,31 @@ var (
 		return l.DomainSnapshotDelete(s, snapshotDeleteFlags())
 	}
 )
+
+// removeDomainSnapshots deletes every snapshot record on `dom` (metadata-only; charly
+// owns the disk lifecycle — charly#800). Every RPC is bounded, and the leg is a named
+// helper so the call-site boundedness guard can drive it with the raw seams blocking
+// forever.
+func (c *libvirtConn) removeDomainSnapshots(dom libvirt.Domain) {
+	n, nerr := boundedRPCValue("snapshot list", teardownRPCBound, func() (int32, error) { return rawSnapshotNum(c.l, dom) })
+	if nerr != nil || n <= 0 {
+		return
+	}
+	names, lerr := boundedRPCValue("snapshot names", teardownRPCBound, func() ([]string, error) { return rawSnapshotNames(c.l, dom, n) })
+	if lerr != nil {
+		return
+	}
+	for _, name := range names {
+		snap, serr := boundedRPCValue("snapshot lookup", teardownRPCBound, func() (libvirt.DomainSnapshot, error) {
+			return rawSnapshotLookup(c.l, dom, name)
+		})
+		if serr != nil {
+			continue
+		}
+		// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings.
+		_ = boundedRPC("snapshot delete", teardownRPCBound, func() error { return rawSnapshotDelete(c.l, snap) })
+	}
+}
 
 // shutdownDomain requests a graceful shutdown.
 func (c *libvirtConn) shutdownDomain(dom libvirt.Domain) error {

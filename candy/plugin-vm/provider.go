@@ -420,21 +420,9 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 			// A domain with snapshots cannot be undefined ("cannot delete inactive
 			// domain with N snapshots"). The snapshot-anchored check-run mode leaves
 			// a golden snapshot on the bed's domain; teardown must remove the
-			// libvirt snapshot records before undefine. The registry-side snapshot
-			// dirs are removed by the caller's disk cleanup (--disk).
-			if n, nerr := boundedRPCValue("snapshot list", teardownRPCBound, func() (int32, error) { return rawSnapshotNum(conn.l, dom) }); nerr == nil && n > 0 {
-				if names, lerr := boundedRPCValue("snapshot names", teardownRPCBound, func() ([]string, error) { return rawSnapshotNames(conn.l, dom, n) }); lerr == nil {
-					for _, name := range names {
-						if snap, serr := boundedRPCValue("snapshot lookup", teardownRPCBound, func() (libvirt.DomainSnapshot, error) { return rawSnapshotLookup(conn.l, dom, name) }); serr == nil {
-							// metadata-only — charly owns the disk lifecycle; full delete hangs on in-use backings.
-							// Bounded like the other teardown RPCs: a wedged virtqemud must not hang destroy (#800).
-							_ = boundedRPC("snapshot delete", teardownRPCBound, func() error {
-								return rawSnapshotDelete(conn.l, snap)
-							})
-						}
-					}
-				}
-			}
+			// libvirt snapshot records before undefine. Every RPC in this leg is
+			// bounded (a wedged virtqemud must not hang destroy — #800).
+			conn.removeDomainSnapshots(dom)
 			err = conn.undefineDomain(dom, env.DeleteDisk)
 		}
 		if err != nil {
