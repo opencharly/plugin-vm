@@ -8,12 +8,16 @@ import (
 	libvirt "github.com/digitalocean/go-libvirt"
 )
 
-// TestLibvirtBounded_AgainstLiveDomain is the LIVE leg for plugin-vm#73: every bounded
-// `verb:libvirt` introspection method is driven against a REAL running charly domain, so
-// the wrappers are proven not to break the real libvirt calls they now enclose (the
-// blocking-seam unit test proves only the bound). Skipped without a session / a running
-// charly-* domain (e.g. in CI); run it with a live VM up, as the plugin's other live
-// tests are.
+// TestLibvirtBounded_AgainstLiveDomain is the LIVE leg for plugin-vm#73: the bounded
+// introspection methods that are safe to drive against a REAL running charly domain
+// are exercised here — listAllDomains, domainInfo, domainXML (read-only), plus
+// listSnapshots, screenshot, and agentCommand (which may legitimately error on a
+// headless/agent-less guest; the point is that each RETURNS bounded). It proves those
+// wrappers do not break the real libvirt calls they enclose. The remaining bounded
+// methods (sendKey, updateDeviceFlags, qmpCommand, and the four MUTATING snapshot RPCs)
+// are NOT driven here — the live test is deliberately non-mutating so it is safe
+// against any running VM — and their bound is proven by the blocking-seam guards in
+// libvirt_bounded_test.go. Skipped without a session / a running charly-* domain.
 func TestLibvirtBounded_AgainstLiveDomain(t *testing.T) {
 	if testing.Short() {
 		t.Skip("needs a live libvirt session + a running charly-* domain")
