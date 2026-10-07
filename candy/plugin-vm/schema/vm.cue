@@ -3,11 +3,10 @@
 // for this plugin's params, used two ways (the same contract core `spec` and the http
 // plugin use):
 //
-//  1. GENERATE the Go param struct — the schema→Go pipeline: concat this file under a
-//     `package params` + `@go(params)` header (`internal/schemagen -mode=concat
-//     -pkg=params` in opencharly/spec), `cue exp gengotypes`, then `-mode=retag` to
-//     double every json tag with a yaml tag. It writes ../params/cue_types_gen.go, so
-//     the provider decodes plugin_input into a TYPED struct, never a hand-parsed map.
+//  1. GENERATE the Go param struct — the schema→Go pipeline concatenates this file
+//     under a `package params` + `@go(params)` header and generates the Go struct from
+//     it, writing ../params/cue_types_gen.go, so the provider decodes plugin_input into
+//     a TYPED struct, never a hand-parsed map. Never hand-edit the generated file.
 //  2. VALIDATE authored input AT RUNTIME — the plugin serves this source over the
 //     Describe channel; the host splices it onto the base (base ++ plugin) and
 //     validates every authored `libvirt:` step's plugin_input against #LibvirtVerbInput.
