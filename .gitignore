@@ -5,3 +5,9 @@
 # the mandated worktree convention reads dirty, and the umbrella's
 # `scripts/verify-pins.sh` fails with `FAIL: <repo>: dirty working tree`.
 .claude/worktrees/
+
+# `charly check run` writes its run evidence under .check/<bed>/<calver>/, and the R10 bed's
+# `charly vm build` writes the built disk + seed ISO under image/<entity>/ — both are GENERATED
+# evidence, and neither ever belongs in git (the disk alone is megabytes).
+.check/
+image/

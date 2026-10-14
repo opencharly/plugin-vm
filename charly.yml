@@ -11,3 +11,100 @@
 discover:
     - path: candy
       recursive: true
+
+# ---------------------------------------------------------------------------
+# THE R10 BED for plugin-vm's VM-BOX EMIT path (opencharly/opencharly#481 leg 19).
+#
+# WHY THIS BED EXISTS, and why its cost is measured rather than argued: leg 3 made
+# `deploykit.EmitVmBox*` take a `context.Context` and drive the `buildkitdrive` kit, so the emit
+# path now crosses a real daemon, a real `buildctl` and a real image write — and THIS lane threads
+# the request context through it. What a user observes is `charly vm build`'s emission, so that is
+# the gate. An earlier attempt declined this bed as "disproportionate"; the change class follows what
+# the user can observe, not the size of the diff. **Measured cost of the instrument: 3m29s** on this
+# host with the Arch cloud image already in the shared VM-image cache.
+#
+# SHAPE (the established idiom): a `kind:local` TEMPLATE that installs nothing (`candy: []` is
+# required there) and carries NO plan — a template's `plan:` is not carried into the composed deploy,
+# so checks declared there silently never run — plus a `disposable: true` DEPLOY that composes it and
+# carries the `plan:`.
+#
+# The entity the step builds is declared HERE (`check-vm-emit-box`) with its OWN name: it is a
+# cloud_image source identical to the shipped box bed's, so the shared cache resolves it without a
+# download, and a distinct name means this bed never mutates a base another bed's overlays point at
+# (the `--force` warning on `vm build` is about exactly that).
+#
+# `${CHARLY_BIN}` is BRACED and named in the step's own evidence; the step writes its log to a file
+# and asserts on that file, so its exit status is its own assertions and never a pipeline's.
+# ---------------------------------------------------------------------------
+check-vm-emit-box:
+    vm:
+        source:
+            kind: cloud_image
+            url: https://geo.mirror.pkgbuild.com/images/v20261001.604814/Arch-Linux-x86_64-cloudimg.qcow2
+            checksum:
+                type: sha256
+                value: 360f0fa49db6813bdc8e35bed230a2dc2ae3567b7b5ab74719c0a706e4e34e87
+            base_user: arch
+            distro: arch
+        disk_size: 4G
+        ram: 1G
+        cpu: 1
+        machine: q35
+        firmware: bios
+        ssh:
+            user: arch
+            port_auto: true
+            key_source: generate
+        cloud_init:
+            timezone: UTC
+            charly_install:
+                strategy: auto
+
+vm-emit-bed-template:
+    local:
+        description: |-
+            Minimal kind:local template for the VM-box emit bed: installs nothing (`candy: []` is
+            required on a kind:local template) and carries no plan — the checks live on the deploy
+            that composes it.
+        candy: []
+
+check-vm-emit-leg19:
+    local:
+        from: vm-emit-bed-template
+        host: local
+        disposable: true
+        lifecycle: test
+        plan:
+            - check: the VM-box EMIT path runs on the ACTIVE binary — `charly vm build` resolving the
+                  entity, building the disk and writing the box through the threaded request context
+              id: vme-box-emitted
+              context: [runtime]
+              timeout: 1800s
+              exit_status: 0
+              stdout:
+                contains: VM-EMIT-OK
+              command:
+                in_container: false
+                command: |
+                    set -eu
+                    LOG="$PWD/.check/vm-emit.log"; mkdir -p "$(dirname "$LOG")"
+                    arms() {
+                    echo "== the binary under test is ${CHARLY_BIN} ($(${CHARLY_BIN} version 2>/dev/null | tail -1))"
+                    # The command's OWN status, never a pipeline's: a failed emit or a failed build
+                    # must surface here.
+                    ${CHARLY_BIN} vm build check-vm-emit-box > "$LOG.raw" 2>&1; rc=$?
+                    grep -Ev '^plugin ' "$LOG.raw" | tail -12 || true
+                    echo "== vm build rc=$rc"
+                    [ "$rc" = "0" ] || { echo "the VM build/emit failed ($rc)"; tail -30 "$LOG.raw"; exit 1; }
+                    echo "== VM-EMIT-OK"
+                    }
+                    if arms >"$LOG" 2>&1; then :; else rc=$?; cat "$LOG"; exit $rc; fi
+                    # The emit's own line is the proof the changed path ran: the box image it wrote.
+                    grep -qE '^Wrote VM box localhost/charly-check-vm-emit-box:' "$LOG" || { echo "the emit did not report a written box"; cat "$LOG"; exit 1; }
+                    grep -q 'vm build rc=0' "$LOG" || { echo "the command's own exit status is not in the evidence"; cat "$LOG"; exit 1; }
+                    if grep -q '^WARNING' "$LOG"; then
+                      unexpected=$(grep '^WARNING' "$LOG" | grep -vc '^WARNING: charly is a dev/worktree build' || true)
+                      [ "$unexpected" = "0" ] || { echo "the changed path emitted $unexpected unexpected warning(s)"; grep '^WARNING' "$LOG"; exit 1; }
+                    fi
+                    cat "$LOG"
+                    echo VM-EMIT-OK
