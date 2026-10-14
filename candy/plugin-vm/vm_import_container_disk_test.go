@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -64,13 +63,15 @@ func TestImportContainerDisk_Live(t *testing.T) {
 	if _, err := exec.LookPath("skopeo"); err != nil {
 		t.Skipf("skopeo not available on this host — skipping the live import: %v", err)
 	}
+	requireBuildkitDrive(t)
+	setTestCommandContext(t)
 
 	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
 	want := []byte{0x42}
 	if err := os.WriteFile(diskPath, want, 0o644); err != nil {
 		t.Fatalf("writing fixture disk: %v", err)
 	}
-	srcRef, err := emitVmBox(context.Background(), "podman", "vm-import-container-disk-test", emitFixtureSpec(), diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox("podman", "vm-import-container-disk-test", emitFixtureSpec(), diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}

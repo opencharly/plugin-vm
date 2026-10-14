@@ -13,6 +13,7 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,6 +29,34 @@ import (
 	"github.com/opencharly/sdk/deploykit"
 	"github.com/opencharly/spec/spec"
 )
+
+// requireBuildkitDrive skips VISIBLY when the BuildKit drive toolchain is absent.
+// The VM-box emit builds through BuildKit — sdk v0.2026287.2124 routed
+// deploykit/vm_box_emit.go through buildkitdrive — so its live tests need the
+// drive's tools and not only an engine plus qemu-img. A boundary whose
+// requirement is absent SKIPS VISIBLY: it never fails as though the code under
+// test were broken, and it is never mocked. This mirrors the guard the sdk ships
+// for its own emit tests (sdk/deploykit/buildkitdrive_guard_test.go).
+func requireBuildkitDrive(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"rootlesskit", "buildkitd", "buildctl"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not installed — skipping the live BuildKit emit path: %v", tool, err)
+		}
+	}
+}
+
+// setTestCommandContext stashes a background cmdCtx for a test that drives the
+// emit path DIRECTLY. In production cmdCtx is the command:vm Invoke context,
+// stashed by setCommandContext at the Invoke(OpRun) entry, and the emit hands it
+// to the builder — so a direct caller must supply one. Restores the previous
+// value. (The precedent for stashing it in a test is vm_build_prune_test.go.)
+func setTestCommandContext(t *testing.T) {
+	t.Helper()
+	old := cmdCtx
+	cmdCtx = context.Background()
+	t.Cleanup(func() { cmdCtx = old })
+}
 
 // emitFixtureSpec builds a populated clone VmSpec (the flat union carries every
 // arm's fields, so the mapping test can pin each field's source). Firmware /
@@ -149,6 +178,8 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping VM box emit/read-back integration test: %v", err)
 	}
+	requireBuildkitDrive(t)
+	setTestCommandContext(t)
 
 	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
 	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
@@ -159,7 +190,7 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	vmName := "vm-box-emit-test"
 	want := buildVmBoxMetadata(vmName, s)
 
-	ref, err := emitVmBox(context.Background(), "podman", vmName, s, diskPath, "")
+	ref, err := emitVmBox("podman", vmName, s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -254,6 +285,8 @@ func TestPushVmBox_Live(t *testing.T) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping the live registry push: %v", err)
 	}
+	requireBuildkitDrive(t)
+	setTestCommandContext(t)
 
 	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
 	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
@@ -261,7 +294,7 @@ func TestPushVmBox_Live(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox(context.Background(), "podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox("podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -366,6 +399,8 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping the containerDisk layout proof: %v", err)
 	}
+	requireBuildkitDrive(t)
+	setTestCommandContext(t)
 
 	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
 	if err := os.WriteFile(diskPath, []byte("qcow2-fixture-payload"), 0o644); err != nil {
@@ -373,7 +408,7 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox(context.Background(), "podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox("podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox(containerDisk): %v", err)
 	}
@@ -412,12 +447,14 @@ func TestEmitVmBox_StableTagLive(t *testing.T) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping: %v", err)
 	}
+	requireBuildkitDrive(t)
+	setTestCommandContext(t)
 	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
 	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
 		t.Fatalf("writing fixture disk: %v", err)
 	}
 	s := emitFixtureSpec()
-	ref, err := emitVmBox(context.Background(), "podman", "vm-box-stable-tag", s, diskPath, "")
+	ref, err := emitVmBox("podman", "vm-box-stable-tag", s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -426,6 +463,43 @@ func TestEmitVmBox_StableTagLive(t *testing.T) {
 	})
 	if err := exec.Command("podman", "image", "exists", "localhost/charly-vm-box-stable-tag:latest").Run(); err != nil {
 		t.Fatalf("no stable :latest handle after emit: %v", err)
+	}
+}
+
+// TestEmitVmBoxHonoursTheCommandContext is the coverage that FAILS if the emit
+// stops handing the command:vm request context to the builder — the failure mode
+// being a fallback to context.Background() somewhere on the emit path, which a
+// suite that only ever passes a background context cannot see.
+//
+// A CANCELLED cmdCtx must abort the emit WITH the cancellation: the build is a
+// minutes-long real engine build, and taking a context IS the contract that the
+// request which asked for it can cancel it. Asserting the cause (not merely that
+// some error came back) is what keeps this from passing vacuously on a broken
+// drive. Skips visibly without podman or the BuildKit drive toolchain.
+func TestEmitVmBoxHonoursTheCommandContext(t *testing.T) {
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skipf("podman not available on this host — skipping: %v", err)
+	}
+	requireBuildkitDrive(t)
+
+	diskPath := filepath.Join(t.TempDir(), "disk.qcow2")
+	if err := os.WriteFile(diskPath, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("writing fixture disk: %v", err)
+	}
+
+	old := cmdCtx
+	t.Cleanup(func() { cmdCtx = old })
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmdCtx = cancelled
+
+	ref, err := emitVmBox("podman", "vm-box-cancelled-ctx-test", emitFixtureSpec(), diskPath, "")
+	if err == nil {
+		t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", ref).Run() })
+		t.Fatalf("emitVmBox with a CANCELLED cmdCtx returned %q and no error — the emit is not handing the command:vm request context to the builder", ref)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a CANCELLED cmdCtx must abort the emit with the cancellation, got: %v", err)
 	}
 }
 
