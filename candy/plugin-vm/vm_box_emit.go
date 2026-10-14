@@ -23,6 +23,7 @@ package vm
 // requested — an explicit delivery request makes both steps load-bearing.
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -91,7 +92,7 @@ func buildVmBoxMetadata(vmName string, vmSpec *VmSpec) *spec.VmBoxMetadata {
 // The engine string is the drive's resolved engine (reply.Engine — "podman" on
 // this host). The error is returned unwrapped so the caller decides how to
 // surface it (the drive warns and keeps the disk build's success).
-func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath string) (string, error) {
+func emitVmBox(ctx context.Context, engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath string) (string, error) {
 	if vmSpec == nil {
 		return "", fmt.Errorf("emitVmBox: nil vm spec")
 	}
@@ -101,7 +102,7 @@ func emitVmBox(engine, vmName string, vmSpec *VmSpec, diskPath, inImagePath stri
 	if path == "" {
 		path = deploykit.VmBoxDiskPath
 	}
-	if err := deploykit.EmitVmBoxAt(engine, ref, meta, diskPath, path); err != nil {
+	if err := deploykit.EmitVmBoxAt(ctx, engine, ref, meta, diskPath, path); err != nil {
 		return "", fmt.Errorf("emitting VM box %s: %w", ref, err)
 	}
 	// A STABLE `:latest` handle alongside the CalVer tag: the CalVer is wall-clock and

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -124,7 +125,7 @@ func (c *VmBakeCmd) Run() error {
 	// `vm build`).
 	fmt.Fprintf(os.Stderr, "bake %q: phase 5 — emitting the VM box\n", c.Box)
 	entry := &SnapshotEntry{Name: "baked", DiskPath: flatDisk}
-	if err := runBakePhase5(engine, c.Box, vmSpec, entry, vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push}); err != nil {
+	if err := runBakePhase5(cmdCtx, engine, c.Box, vmSpec, entry, vmBoxEmitOpts{ContainerDisk: c.ContainerDisk, Push: c.Push}); err != nil {
 		return err
 	}
 
@@ -197,8 +198,8 @@ var (
 // uses, so a baked box lands at the KubeVirt/Cua /disk/disk.img contract. The
 // emit is load-bearing (a bake that cannot emit its box has not produced its
 // artifact); --push additionally makes the delivery load-bearing.
-func runBakePhase5(engine, box string, vmSpec *VmSpec, entry *SnapshotEntry, emit vmBoxEmitOpts) error {
-	ref, emitErr := bakeEmitBox(engine, box, vmSpec, entry.DiskPath, boxInImagePath(emit.ContainerDisk))
+func runBakePhase5(ctx context.Context, engine, box string, vmSpec *VmSpec, entry *SnapshotEntry, emit vmBoxEmitOpts) error {
+	ref, emitErr := bakeEmitBox(ctx, engine, box, vmSpec, entry.DiskPath, boxInImagePath(emit.ContainerDisk))
 	if emitErr != nil {
 		return fmt.Errorf("vm bake: emitting box: %w", emitErr)
 	}

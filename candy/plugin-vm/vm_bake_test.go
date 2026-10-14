@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,7 +110,7 @@ func TestRunBakePhase5(t *testing.T) {
 
 	// --container-disk --push: the containerDisk path + a delivery.
 	var gotInImage, pushedDst string
-	bakeEmitBox = func(_ /*engine*/, _ /*box*/ string, _ *VmSpec, _ /*diskPath*/, inImagePath string) (string, error) {
+	bakeEmitBox = func(_ context.Context /*ctx*/, _ /*engine*/, _ /*box*/ string, _ *VmSpec, _ /*diskPath*/, inImagePath string) (string, error) {
 		gotInImage = inImagePath
 		return "localhost/charly-vm:1", nil
 	}
@@ -117,7 +118,7 @@ func TestRunBakePhase5(t *testing.T) {
 		pushedDst = dst
 		return nil
 	}
-	if err := runBakePhase5("podman", "vm", s, entry, vmBoxEmitOpts{ContainerDisk: true, Push: "reg.example.com/cua:1"}); err != nil {
+	if err := runBakePhase5(context.Background(), "podman", "vm", s, entry, vmBoxEmitOpts{ContainerDisk: true, Push: "reg.example.com/cua:1"}); err != nil {
 		t.Fatalf("runBakePhase5(--container-disk --push): %v", err)
 	}
 	if gotInImage != deploykit.ContainerDiskPath {
@@ -133,7 +134,7 @@ func TestRunBakePhase5(t *testing.T) {
 	// Defaults: no --container-disk keeps the VM-box path (""), no --push means
 	// no delivery.
 	gotInImage, pushedDst = "stale", "stale"
-	if err := runBakePhase5("podman", "vm", s, entry, vmBoxEmitOpts{}); err != nil {
+	if err := runBakePhase5(context.Background(), "podman", "vm", s, entry, vmBoxEmitOpts{}); err != nil {
 		t.Fatalf("runBakePhase5(defaults): %v", err)
 	}
 	if gotInImage != "" {
@@ -145,18 +146,20 @@ func TestRunBakePhase5(t *testing.T) {
 
 	// The emit is load-bearing (a bake that cannot emit its box has not produced
 	// its artifact); a push failure under --push is returned too.
-	bakeEmitBox = func(string, string, *VmSpec, string, string) (string, error) {
+	bakeEmitBox = func(context.Context, string, string, *VmSpec, string, string) (string, error) {
 		return "", fmt.Errorf("boom")
 	}
-	if err := runBakePhase5("podman", "vm", s, entry, vmBoxEmitOpts{Push: "reg.example.com/x:1"}); err == nil {
+	if err := runBakePhase5(context.Background(), "podman", "vm", s, entry, vmBoxEmitOpts{Push: "reg.example.com/x:1"}); err == nil {
 		t.Error("an emit failure must be returned, not warned")
 	}
-	if err := runBakePhase5("podman", "vm", s, entry, vmBoxEmitOpts{}); err == nil {
+	if err := runBakePhase5(context.Background(), "podman", "vm", s, entry, vmBoxEmitOpts{}); err == nil {
 		t.Error("an emit failure must be returned (the bake's emit is load-bearing)")
 	}
-	bakeEmitBox = func(string, string, *VmSpec, string, string) (string, error) { return "localhost/x:1", nil }
+	bakeEmitBox = func(context.Context, string, string, *VmSpec, string, string) (string, error) {
+		return "localhost/x:1", nil
+	}
 	bakePushBox = func(string, string, string) error { return fmt.Errorf("push boom") }
-	if err := runBakePhase5("podman", "vm", s, entry, vmBoxEmitOpts{Push: "reg.example.com/x:1"}); err == nil {
+	if err := runBakePhase5(context.Background(), "podman", "vm", s, entry, vmBoxEmitOpts{Push: "reg.example.com/x:1"}); err == nil {
 		t.Error("a push failure under --push must be returned")
 	}
 }
@@ -186,7 +189,7 @@ func TestRunBakePhase5_Live(t *testing.T) {
 	dstRef := reg + "/charly-bake-containerdisk-test:" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	t.Cleanup(func() { _ = exec.Command("podman", "rmi", "-f", dstRef).Run() })
 
-	if err := runBakePhase5("podman", "vm-bake-containerdisk-test", emitFixtureSpec(), entry,
+	if err := runBakePhase5(context.Background(), "podman", "vm-bake-containerdisk-test", emitFixtureSpec(), entry,
 		vmBoxEmitOpts{ContainerDisk: true, Push: dstRef}); err != nil {
 		t.Fatalf("runBakePhase5(--container-disk --push): %v", err)
 	}

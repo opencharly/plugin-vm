@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -53,6 +54,7 @@ func TestContainerDiskCacheDir_DigestKeyed(t *testing.T) {
 // bytes and the identity marker landed. LIVE-OR-SKIP by contract: with
 // CHARLY_TEST_REGISTRY unset it SKIPS visibly (never mocks the registry boundary).
 func TestImportContainerDisk_Live(t *testing.T) {
+	requireBuildkitDrive(t)
 	reg := os.Getenv("CHARLY_TEST_REGISTRY")
 	if reg == "" {
 		t.Skip("CHARLY_TEST_REGISTRY unset — skipping the live import (LIVE-OR-SKIP; set it to a real registry, e.g. localhost:5000)")
@@ -69,7 +71,7 @@ func TestImportContainerDisk_Live(t *testing.T) {
 	if err := os.WriteFile(diskPath, want, 0o644); err != nil {
 		t.Fatalf("writing fixture disk: %v", err)
 	}
-	srcRef, err := emitVmBox("podman", "vm-import-container-disk-test", emitFixtureSpec(), diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox(context.Background(), "podman", "vm-import-container-disk-test", emitFixtureSpec(), diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
