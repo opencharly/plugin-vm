@@ -11,6 +11,7 @@ package vm
 // unavailable (t.Skip).
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -158,7 +159,7 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	vmName := "vm-box-emit-test"
 	want := buildVmBoxMetadata(vmName, s)
 
-	ref, err := emitVmBox("podman", vmName, s, diskPath, "")
+	ref, err := emitVmBox(context.Background(), "podman", vmName, s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -260,7 +261,7 @@ func TestPushVmBox_Live(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox("podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox(context.Background(), "podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -372,7 +373,7 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox("podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox(context.Background(), "podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox(containerDisk): %v", err)
 	}
@@ -416,7 +417,7 @@ func TestEmitVmBox_StableTagLive(t *testing.T) {
 		t.Fatalf("writing fixture disk: %v", err)
 	}
 	s := emitFixtureSpec()
-	ref, err := emitVmBox("podman", "vm-box-stable-tag", s, diskPath, "")
+	ref, err := emitVmBox(context.Background(), "podman", "vm-box-stable-tag", s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}

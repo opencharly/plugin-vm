@@ -206,7 +206,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) er
 	// emit and the push load-bearing: the operator asked for a deliverable image,
 	// so a failure is returned rather than silently skipped.
 	vmName, _ := parseImageArg(box)
-	ref, emitErr := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk, boxInImagePath(emit.ContainerDisk))
+	ref, emitErr := emitVmBox(cmdCtx, reply.Engine, vmName, &vmSpec, builtDisk, boxInImagePath(emit.ContainerDisk))
 	if emit.Push != "" {
 		if emitErr != nil {
 			return fmt.Errorf("box emission for --push: %w", emitErr)
