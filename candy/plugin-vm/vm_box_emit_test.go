@@ -11,6 +11,7 @@ package vm
 // unavailable (t.Skip).
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -145,6 +146,7 @@ func TestVmBoxMetadataLabelRoundTrip(t *testing.T) {
 // deploykit.VmCapabilitiesFromLabels, and assert equality with the metadata
 // buildVmBoxMetadata derives. Skips when podman is not available on the host.
 func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
+	requireBuildkitDrive(t)
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping VM box emit/read-back integration test: %v", err)
 	}
@@ -158,7 +160,7 @@ func TestEmitVmBoxReadBackRoundTrip(t *testing.T) {
 	vmName := "vm-box-emit-test"
 	want := buildVmBoxMetadata(vmName, s)
 
-	ref, err := emitVmBox("podman", vmName, s, diskPath, "")
+	ref, err := emitVmBox(context.Background(), "podman", vmName, s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -246,6 +248,7 @@ func TestPushVmBox_Argv(t *testing.T) {
 // registry-consumable. LIVE-OR-SKIP by contract: with CHARLY_TEST_REGISTRY unset
 // the test SKIPS cleanly (visibly) — it never mocks the registry boundary.
 func TestPushVmBox_Live(t *testing.T) {
+	requireBuildkitDrive(t)
 	reg := os.Getenv("CHARLY_TEST_REGISTRY")
 	if reg == "" {
 		t.Skip("CHARLY_TEST_REGISTRY unset — skipping the live registry push (LIVE-OR-SKIP; set it to a real registry, e.g. localhost:5000)")
@@ -260,7 +263,7 @@ func TestPushVmBox_Live(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox("podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox(context.Background(), "podman", "vm-box-push-test", s, diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}
@@ -327,7 +330,7 @@ func TestVmBuildCmd_FlagWiring(t *testing.T) {
 
 	var gotOpts vmBoxEmitOpts
 	var gotReq spec.VmBuildRequest
-	vmBuildDrive = func(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
+	vmBuildDrive = func(_ context.Context, box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
 		gotOpts = emit
 		gotReq = req
 		return nil
@@ -362,6 +365,7 @@ func TestVmBuildCmd_FlagWiring(t *testing.T) {
 // default /disk.qcow2 (KubeVirt scans /disk and boots the single file it finds).
 // The metadata label is read back from the SAME image. Skips without podman.
 func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
+	requireBuildkitDrive(t)
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping the containerDisk layout proof: %v", err)
 	}
@@ -372,7 +376,7 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 	}
 
 	s := emitFixtureSpec()
-	srcRef, err := emitVmBox("podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
+	srcRef, err := emitVmBox(context.Background(), "podman", "vm-box-cd-layout", s, diskPath, boxInImagePath(true))
 	if err != nil {
 		t.Fatalf("emitVmBox(containerDisk): %v", err)
 	}
@@ -408,6 +412,7 @@ func TestEmitVmBox_ContainerDiskLayoutLive(t *testing.T) {
 // wall-clock CalVer tag — a consumer that must NAME the box (a kind:kubevirt
 // containerDisk.image) cannot know the CalVer. Fails without the stable tag.
 func TestEmitVmBox_StableTagLive(t *testing.T) {
+	requireBuildkitDrive(t)
 	if _, err := exec.LookPath("podman"); err != nil {
 		t.Skipf("podman not available on this host — skipping: %v", err)
 	}
@@ -416,7 +421,7 @@ func TestEmitVmBox_StableTagLive(t *testing.T) {
 		t.Fatalf("writing fixture disk: %v", err)
 	}
 	s := emitFixtureSpec()
-	ref, err := emitVmBox("podman", "vm-box-stable-tag", s, diskPath, "")
+	ref, err := emitVmBox(context.Background(), "podman", "vm-box-stable-tag", s, diskPath, "")
 	if err != nil {
 		t.Fatalf("emitVmBox: %v", err)
 	}

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -46,7 +47,7 @@ func (c *VmBuildCmd) Run() error {
 	default:
 		return fmt.Errorf("unsupported disk type %q (valid: qcow2, raw)", c.Type)
 	}
-	return vmBuildDrive(c.Box, spec.VmBuildRequest{
+	return vmBuildDrive(cmdCtx, c.Box, spec.VmBuildRequest{
 		Box: c.Box, Size: c.Size, RootSize: c.RootSize, Tag: c.Tag,
 		Type: c.Type, Transport: c.Transport, Console: c.Console, Force: c.Force,
 		FromSnapshot: c.FromSnapshot,
@@ -77,7 +78,7 @@ type vmBoxEmitOpts struct {
 // resolve → per-entity flock → per-source-kind dispatch → box emission. It is
 // the single drive behind the `charly vm build` command (R3 — one drive, no
 // duplicated dispatch).
-func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
+func runVmBuildDrive(ctx context.Context, box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) error {
 	if cmdExec == nil {
 		return fmt.Errorf("vm build: no host reverse channel (command not compiled-in?)")
 	}
@@ -206,7 +207,7 @@ func runVmBuildDrive(box string, req spec.VmBuildRequest, emit vmBoxEmitOpts) er
 	// emit and the push load-bearing: the operator asked for a deliverable image,
 	// so a failure is returned rather than silently skipped.
 	vmName, _ := parseImageArg(box)
-	ref, emitErr := emitVmBox(reply.Engine, vmName, &vmSpec, builtDisk, boxInImagePath(emit.ContainerDisk))
+	ref, emitErr := emitVmBox(ctx, reply.Engine, vmName, &vmSpec, builtDisk, boxInImagePath(emit.ContainerDisk))
 	if emit.Push != "" {
 		if emitErr != nil {
 			return fmt.Errorf("box emission for --push: %w", emitErr)

@@ -60,7 +60,6 @@ type resolvedConfig struct {
 	Claimant     string
 	ClaimantNode *spec.Deploy
 	VmBackend    string
-	BuildEngine  string
 	RunEngine    string
 	VmState      *spec.VmDeployState
 	VmEntities   []string
@@ -97,9 +96,8 @@ func hostConfigResolve(entity, claimantID string) (resolvedConfig, error) {
 	}
 	dir, _ := os.Getwd()
 	cfg := resolvedConfig{
-		VmBackend:   rt.VmBackend,
-		BuildEngine: rt.BuildEngine,
-		RunEngine:   rt.RunEngine,
+		VmBackend: rt.VmBackend,
+		RunEngine: rt.RunEngine,
 	}
 	uf, ok, err := loaderkit.LoadUnifiedViaExecutor(cmdCtx, cmdExec, dir)
 	if err != nil {
