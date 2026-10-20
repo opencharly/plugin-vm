@@ -289,11 +289,6 @@ func resolveBootcImageRef(engine, image string) (string, error) {
 	return resolved, nil
 }
 
-// ensureBuilderImageBuilt resolves an internal builder-image name to its newest local CalVer tag,
-// BUILDING it on demand when it isn't in local storage via InvokeProvider(build, box, OpBuild) — the
-// SAME compiled-in build:box word candy/plugin-box's dispatchBuild drives for `charly box build`,
-// reached directly instead of round-tripping through a core reentry. A ref containing "/" (a full
-// registry ref) is returned unchanged.
 // builderAutoBuildRequest is the build request the VM auto-builder sends for a
 // missing builder image. It MUST carry the project dir: the box build resolves
 // its context from it, and an empty Dir makes the drive fail with
@@ -307,6 +302,11 @@ func builderAutoBuildRequest(builderRef, dir string) spec.BuildRequest {
 	}
 }
 
+// ensureBuilderImageBuilt resolves an internal builder-image name to its newest local CalVer tag,
+// BUILDING it on demand when it isn't in local storage via InvokeProvider(build, box, OpBuild) — the
+// SAME compiled-in build:box word candy/plugin-box's dispatchBuild drives for `charly box build`,
+// reached directly instead of round-tripping through a core reentry. A ref containing "/" (a full
+// registry ref) is returned unchanged.
 func ensureBuilderImageBuilt(ctx context.Context, ex *sdk.Executor, engine, builderRef string) (string, error) {
 	if strings.Contains(builderRef, "/") {
 		return builderRef, nil
