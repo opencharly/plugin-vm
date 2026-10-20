@@ -294,6 +294,19 @@ func resolveBootcImageRef(engine, image string) (string, error) {
 // SAME compiled-in build:box word candy/plugin-box's dispatchBuild drives for `charly box build`,
 // reached directly instead of round-tripping through a core reentry. A ref containing "/" (a full
 // registry ref) is returned unchanged.
+// builderAutoBuildRequest is the build request the VM auto-builder sends for a
+// missing builder image. It MUST carry the project dir: the box build resolves
+// its context from it, and an empty Dir makes the drive fail with
+// "buildkitdrive: build: no context" (the box builds fine through
+// `charly box build` because the CLI passes the dir).
+func builderAutoBuildRequest(builderRef, dir string) spec.BuildRequest {
+	return spec.BuildRequest{
+		Boxes:           []string{builderRef},
+		IncludeDisabled: true,
+		Dir:             dir,
+	}
+}
+
 func ensureBuilderImageBuilt(ctx context.Context, ex *sdk.Executor, engine, builderRef string) (string, error) {
 	if strings.Contains(builderRef, "/") {
 		return builderRef, nil
@@ -302,7 +315,11 @@ func ensureBuilderImageBuilt(ctx context.Context, ex *sdk.Executor, engine, buil
 		return resolved, nil
 	}
 	fmt.Fprintf(os.Stderr, "Builder image %q not in local storage — building it automatically...\n", builderRef)
-	params, err := json.Marshal(spec.BuildRequest{Boxes: []string{builderRef}, IncludeDisabled: true})
+	dir, werr := os.Getwd()
+	if werr != nil {
+		return "", fmt.Errorf("resolving the project dir for the builder auto-build: %w", werr)
+	}
+	params, err := json.Marshal(builderAutoBuildRequest(builderRef, dir))
 	if err != nil {
 		return "", err
 	}
