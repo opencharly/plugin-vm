@@ -67,3 +67,26 @@ plugin-vm:
                 - contains: stopped
               context:
                 - runtime
+
+# ---------------------------------------------------------------------------
+# The verb/schema skills this repo's own candy owns — routing only.
+#
+# Each node carries `name`/`family`/`owner` (plus `triggers:` where the skill
+# generates DISPATCHER.md rows). The prose is the skill FILE at
+# `<repo root>/.agents/skills/<name>/SKILL.md`, never an inline `description:`
+# or `content:` — an inline body that disagrees with its file is a hard error
+# in the marketplace generator. `family:` is the marketplace family the skill
+# was authored under, kept so every existing `/charly-<family>:<name>` address
+# still resolves; `owner:` names the candy whose command/kind surface the
+# skill documents. This candy composes no image, so these nodes add nothing to
+# any `ai.opencharly.skill` OCI label; the bodies reach consumers through the
+# generated marketplace corpus.
+# ---------------------------------------------------------------------------
+vm-skill:
+  skill:
+    name: vm
+    family: vm
+    owner: plugin-vm
+    triggers:
+      - "`charly update` / `charly vm *` / VM entities in `vm.yml` or `vm:`"
+      - "Managed `~/.config/charly/ssh_config` fragment / `charly vm create` writes Host stanza"
