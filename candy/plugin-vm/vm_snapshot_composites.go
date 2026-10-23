@@ -182,7 +182,7 @@ func (s revertAndStartSteps) run(entity, snapName string) error {
 		return err
 	}
 	if !stopped {
-		return fmt.Errorf("no such VM %q: no libvirt domain and no qemu state — nothing to revert-and-start", name)
+		return fmt.Errorf("no such VM %q: no libvirt domain, qemu state or krun container — nothing to revert-and-start", name)
 	}
 	// The domain is now offline: internal revert (qemu-img snapshot -a) can
 	// mutate the qcow2 and external revert can rebase the inactive domain.

@@ -121,9 +121,13 @@ func autoAllocateExclusiveGPUs(spec *VmSpec, ovr *VmInstanceOverride, cnode *Dep
 		return ovr, nil
 	}
 
-	// A PCI <hostdev> only renders on the libvirt backend.
-	if backend != "" && backend != "libvirt" {
-		return ovr, fmt.Errorf("%s requires exclusive GPU resource %q but backend is %q — GPU passthrough needs `backend: libvirt` on the kind:vm entity (PCI <hostdev> does not render under qemu)", domainName, tok, backend)
+	// A PCI <hostdev> renders only on a backend whose provider class supports it;
+	// the capability is data on the provider, not a backend-word branch.
+	if backend != "" {
+		provider, perr := vmBackendProviderFor(backend)
+		if perr != nil || !provider.SupportsPCIHostdev() {
+			return ovr, fmt.Errorf("%s requires exclusive GPU resource %q but backend is %q — GPU passthrough needs a backend with PCI hostdev support (`backend: libvirt`) on the kind:vm entity", domainName, tok, backend)
+		}
 	}
 
 	rep := DetectVFIO()

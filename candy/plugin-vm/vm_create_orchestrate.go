@@ -32,6 +32,20 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	}
 	vmDomainName := "charly-" + name
 
+	// A krun guest has NO disk/seed/OVMF: its root is a containerd snapshot. Branch
+	// BEFORE the libvirt instance-override / GPU auto-allocation path (which would
+	// fail at the missing disk.qcow2, and whose PCI-hostdev refusal would mask the
+	// krun-specific NEEDS UPSTREAM NVIDIA refusal) and hand the fully host-resolved
+	// request to the provider.
+	if backend == string(vmBackendKrun) {
+		vmStateBase, err := vmDir()
+		if err != nil {
+			return err
+		}
+		vmStateDir := filepath.Join(vmStateBase, vmDomainName)
+		return c.runKrunCreate(entity, domainID, name, vmDomainName, vmStateDir, spec, vmState, perDomain, claimantNode, resources)
+	}
+
 	// Merge this host's per-domain instance override (~/.local/share/charly/vm/
 	// <domain>/instance.yml) onto the spec BEFORE any rendering. Its `libvirt:`
 	// overlay carries the host-specific GPU <hostdev> + host-path virtiofs
@@ -397,6 +411,13 @@ func migrateStaleEntityAlias(home, entity string) {
 // domainName is the FULL per-domain identity (domainID[-instance]) — the same token the per-domain
 // state dir (charly-<domainName>) and the libvirt domain use, so the published alias, its identity
 // file, and its known_hosts all point at THIS domain's own state (never a sibling's).
+// vmManagedSSHAlias is the ONE managed ssh-config alias for a VM name. The
+// publisher (publishVmSshAlias) and every recorder (the krun state) call it, so
+// the alias a stop will ssh to can never diverge from the alias that was
+// published. The input is the BARE VM name (publishVmSshAlias is called with the
+// bare name and this function adds the `charly-` namespace exactly once).
+func vmManagedSSHAlias(vmName string) string { return VmSshAlias(vmName) }
+
 func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams) error {
 	vmStateBase, err := vmDir()
 	if err != nil {
@@ -438,7 +459,7 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 	}
 
 	stanza := VmSshStanza{
-		Alias:          VmSshAlias(domainName),
+		Alias:          vmManagedSSHAlias(domainName),
 		Hostname:       "127.0.0.1",
 		Port:           rt.SSHPort,
 		User:           resolveVmSshUser(spec),

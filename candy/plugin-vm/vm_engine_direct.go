@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// vm_engine_direct.go — the moved VM CLI handlers reach the libvirt/qemu ENGINE by a DIRECT in-package
+// vm_engine_direct.go — the moved VM CLI handlers reach the libvirt/qemu/krun ENGINE by a DIRECT in-package
 // call now (command:vm and verb:libvirt are the SAME compiled-in plugin), not the former host→plugin
 // RPC. These keep the handlers' call sites (invokeVmPlugin / invokeVmPluginEnv / invokeVmCreate +
 // the reply decoders) byte-identical while dispatching straight to provider.go's dispatchInternalOp.

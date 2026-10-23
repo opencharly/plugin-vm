@@ -52,6 +52,12 @@ func TestDestroyVmDomain_QemuStateDir(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("seed state dir: %v", err)
 	}
+	// A bare directory is not a VM: the qemu provider claims only a dir carrying a
+	// qemu artifact (`command` from vm create / `qemu.pid` once started). The
+	// marker also keeps a krun state dir (krun-plan.json) from being claimed here.
+	if err := os.WriteFile(filepath.Join(stateDir, "command"), []byte("qemu-system-x86_64 -name fixture"), 0o644); err != nil {
+		t.Fatalf("seed qemu command: %v", err)
+	}
 	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
 
 	torn, err := destroyVmDomain(name, false)
@@ -188,5 +194,21 @@ func TestDestroyVmDomain_LibvirtKeepDiskPreservesStateDir(t *testing.T) {
 	}
 	if _, statErr := os.Stat(stateDir); statErr != nil {
 		t.Fatalf("libvirt destroy WITHOUT --disk removed the state dir — --keep-disk violated: %v", statErr)
+	}
+}
+
+// TestDestroyVmDomainOnBackendNoHolderIsNoop exercises the seam DIRECTLY for a
+// backend that holds nothing: it must report torn=false with no error (the old
+// default arm's behavior). This keeps the seam covered now that destroyVmDomain
+// holds the provider itself.
+func TestDestroyVmDomainOnBackendNoHolderIsNoop(t *testing.T) {
+	for _, backend := range []string{"", "bogus"} {
+		torn, err := destroyVmDomainOnBackend("charly-no-such-destroy-fixture", backend, "", false)
+		if err != nil {
+			t.Fatalf("destroyVmDomainOnBackend(%q): unexpected error: %v", backend, err)
+		}
+		if torn {
+			t.Fatalf("destroyVmDomainOnBackend(%q): torn=true for a backend that holds nothing", backend)
+		}
 	}
 }

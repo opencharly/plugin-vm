@@ -78,6 +78,18 @@ type vmCreateReq struct {
 	// validation (ValidateXMLEgress) WITHOUT creating; the host then issues a
 	// second create call. Matches charly's vmCreateReq.
 	ValidateOnly bool `json:"validate_only,omitempty"`
+	// KrunNVIDIA carries the claimant's NVIDIA intent into the krun provider so
+	// its refusal can name the upstream limit. Resolved by the create path (which
+	// holds the claimant + resource vocabulary); false for every other backend.
+	KrunNVIDIA bool `json:"krun_nvidia,omitempty"`
+	// KrunSSHPubKey is the per-domain public key the krun guest must authorize.
+	// A krun guest has no cloud-init seed, so the key rides the image contract's
+	// env channel instead.
+	KrunSSHPubKey string `json:"krun_ssh_pub_key,omitempty"`
+	// KrunSSHAlias is the EXACT managed alias publishVmSshAlias published for
+	// this create (vmManagedSSHAlias of the bare name), recorded so Stop ssh's
+	// to the alias that exists.
+	KrunSSHAlias string `json:"krun_ssh_alias,omitempty"`
 }
 
 // Invoke runs one `libvirt:` verb method against the in-process libvirt impl and self-evaluates
@@ -435,31 +447,23 @@ func dispatchInternalOp(env vmEnv) (*pb.InvokeReply, error) {
 		if r == nil {
 			return internalJSON(map[string]any{"error": "create: missing request payload"})
 		}
-		// ValidateOnly: render the libvirt domain XML and RETURN it for host-side
-		// egress validation (the out-of-process plugin no-ops egress; the host runs
-		// the real ValidateXMLEgress, then issues a second create call). QEMU has no
-		// domain XML (its cloud-init is already egress-validated host-side via the
-		// host's RegenerateSeedISO), so the validate pass returns empty.
+		provider, perr := vmBackendProviderFor(r.Backend)
+		if perr != nil {
+			return internalJSON(map[string]any{"error": perr.Error()})
+		}
+		// ValidateOnly: render the provider's egress-validatable config and RETURN
+		// it for host-side validation (the out-of-process plugin no-ops egress; the
+		// host runs the real ValidateXMLEgress, then issues a second create call).
+		// QEMU and krun have no domain XML (their images/seeds are validated
+		// elsewhere), so their validate pass returns empty.
 		if r.ValidateOnly {
-			if r.Backend == "libvirt" {
-				xmlStr, xerr := RenderDomainXML(r.Spec, r.RT)
-				if xerr != nil {
-					return internalJSON(map[string]any{"error": xerr.Error()})
-				}
-				return internalJSON(map[string]any{"ok": true, "rendered_domain_xml": xmlStr})
+			xmlStr, xerr := provider.RenderForValidation(*r)
+			if xerr != nil {
+				return internalJSON(map[string]any{"error": xerr.Error()})
 			}
-			return internalJSON(map[string]any{"ok": true})
+			return internalJSON(map[string]any{"ok": true, "rendered_domain_xml": xmlStr})
 		}
-		var cerr error
-		switch r.Backend {
-		case "libvirt":
-			cerr = runVmSpecCreateLibvirt(r.Spec, r.RT, r.VmDomainName, r.Home, r.VmName, r.Name)
-		case "qemu":
-			cerr = runVmSpecCreateQemu(r.Spec, r.RT, r.VmDomainName, r.Home, r.VmName, r.Name, r.VmStateDir)
-		default:
-			cerr = fmt.Errorf("unknown backend %q", r.Backend)
-		}
-		if cerr != nil {
+		if cerr := provider.Create(*r); cerr != nil {
 			return internalJSON(map[string]any{"error": cerr.Error()})
 		}
 		return internalJSON(map[string]any{"ok": true})
