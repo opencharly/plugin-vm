@@ -32,6 +32,20 @@ func (c *VmCreateCmd) runVmSpecCreate(vmName string, spec *VmSpec, backend strin
 	}
 	vmDomainName := "charly-" + name
 
+	// A krun guest has NO disk/seed/OVMF: its root is a containerd snapshot. Branch
+	// BEFORE the libvirt instance-override / GPU auto-allocation path (which would
+	// fail at the missing disk.qcow2, and whose PCI-hostdev refusal would mask the
+	// krun-specific NEEDS UPSTREAM NVIDIA refusal) and hand the fully host-resolved
+	// request to the provider.
+	if backend == string(vmBackendKrun) {
+		vmStateBase, err := vmDir()
+		if err != nil {
+			return err
+		}
+		vmStateDir := filepath.Join(vmStateBase, vmDomainName)
+		return c.runKrunCreate(entity, domainID, name, vmDomainName, vmStateDir, spec, vmState, perDomain, claimantNode, resources)
+	}
+
 	// Merge this host's per-domain instance override (~/.local/share/charly/vm/
 	// <domain>/instance.yml) onto the spec BEFORE any rendering. Its `libvirt:`
 	// overlay carries the host-specific GPU <hostdev> + host-path virtiofs

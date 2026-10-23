@@ -12,7 +12,7 @@
 //     snapshot / gpu / import / clone / cp-box / list), the VM lifecycle CLI. COMPILED-IN, it
 //     dispatches IN-PROC via Invoke(OpRun) (runVmCommand → kong-parse the VmCmd tree — command.go),
 //     so the handlers run in charly's OWN process and inherit charly's real stdio/TTY natively
-//     (`charly vm console` / `charly vm ssh` stay interactive). They own the CLI + the libvirt/qemu
+//     (`charly vm console` / `charly vm ssh` stay interactive). They own the CLI + the libvirt/qemu/krun
 //     engine (in-package) and reach the host-only Mechanisms over generic seams: the config loader +
 //     deploy ledger via HostBuild("config-resolve") (ledger writes plugin-side via
 //     candy/plugin-vm/vm_host_persist.go — the former config-persist HostBuild is DELETED),

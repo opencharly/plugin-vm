@@ -70,15 +70,14 @@ func (c *VmScreenshotCmd) Run() error {
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	switch backend {
-	case "qemu":
-		if err := qemuScreendump(name, tmpPath); err != nil {
-			return err
-		}
-	default:
-		if err := virshScreenshot(name, tmpPath); err != nil {
-			return err
-		}
+	provider, perr := vmBackendProviderFor(backend)
+	if perr != nil {
+		// Preserve the diagnosis path's degrade: an unresolvable backend falls back
+		// to the libvirt probe rather than blocking the capture.
+		provider = libvirtBackend{}
+	}
+	if err := provider.Screenshot(name, tmpPath); err != nil {
+		return err
 	}
 
 	if err := capturedScreenToPNG(tmpPath, out); err != nil {
@@ -457,10 +456,10 @@ func vmBackendFor(entity string) (string, error) {
 	// Reads only Backend; no claimant identity — this is a config-free diagnosis path.
 	reply, err := hostConfigResolve(entity, "")
 	if err != nil {
-		return "libvirt", nil //nolint:nilerr // see comment above: degrade, do not block a diagnosis
+		return string(vmBackendLibvirt), nil //nolint:nilerr // see comment above: degrade, do not block a diagnosis
 	}
 	if reply.Backend == "" {
-		return "libvirt", nil
+		return string(vmBackendLibvirt), nil
 	}
 	return reply.Backend, nil
 }

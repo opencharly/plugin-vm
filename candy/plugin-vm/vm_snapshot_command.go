@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/opencharly/spec/spec"
@@ -36,6 +37,30 @@ func snapshotVmName(entity, domain string) string {
 	return entity
 }
 
+// refuseKrunSnapshot keeps the libvirt/qemu snapshot path from being run against
+// a krun guest. A krun snapshot is a containerd commit + state-volume clone (W2
+// seam 2); that mechanism lives in crabbox's `internal/providers/containerd`
+// package, which Go's internal rule forbids this module from importing, and a
+// second implementation is the R2 duplication the krun provider exists to avoid.
+// The refusal names the extraction instead.
+func refuseKrunSnapshot(vmName string) error {
+	provider, _, _, err := vmBackendHolder(vmNameFQ(vmName))
+	if err != nil || provider == nil || provider.Word() != vmBackendKrun {
+		return nil
+	}
+	return fmt.Errorf(
+		"snapshot is not implemented for a krun guest: it is a containerd commit + state-volume clone, " +
+			"and the W2 seam-2 implementation is not importable from this module yet (tracked: opencharly/crabbox#21)")
+}
+
+// vmNameFQ namespaces a bare snapshot identity the way the VM lifecycle does.
+func vmNameFQ(name string) string {
+	if strings.HasPrefix(name, "charly-") {
+		return name
+	}
+	return "charly-" + name
+}
+
 // VmSnapshotCreateCmd implements `charly vm snapshot create <vm> <name>`.
 type VmSnapshotCreateCmd struct {
 	Vm          string `arg:"" help:"VM name (kind:vm entity)"`
@@ -49,6 +74,9 @@ type VmSnapshotCreateCmd struct {
 // Run executes `charly vm snapshot create`.
 func (c *VmSnapshotCreateCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	entry, err := CreateSnapshot(SnapshotCreateOpts{
 		VmName:      vmName,
 		SnapName:    c.Name,
@@ -83,6 +111,9 @@ type VmSnapshotCreateConsistentCmd struct {
 // Run executes `charly vm snapshot create-consistent`.
 func (c *VmSnapshotCreateConsistentCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	entry, err := createConsistentSnapshot(consistentCreateOpts(vmName, c.Name, c.Mode, c.Description))
 	if err != nil {
 		return err
@@ -111,6 +142,9 @@ type VmSnapshotCaptureDeclaredCmd struct {
 // Run executes `charly vm snapshot capture-declared`.
 func (c *VmSnapshotCaptureDeclaredCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 
 	dir, err := os.Getwd()
 	if err != nil {
@@ -174,6 +208,9 @@ type VmSnapshotListCmd struct {
 
 func (c *VmSnapshotListCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	entries, err := ListSnapshots(vmName)
 	if err != nil {
 		return err
@@ -207,6 +244,9 @@ type VmSnapshotDeleteCmd struct {
 
 func (c *VmSnapshotDeleteCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	if err := DeleteSnapshot(SnapshotDeleteOpts{
 		VmName:   vmName,
 		SnapName: c.Name,
@@ -227,6 +267,9 @@ type VmSnapshotRevertCmd struct {
 
 func (c *VmSnapshotRevertCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	if err := RevertSnapshot(vmName, c.Name); err != nil {
 		return err
 	}
@@ -248,6 +291,9 @@ type VmSnapshotRevertAndStartCmd struct {
 
 func (c *VmSnapshotRevertAndStartCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	if err := revertAndStartVm(vmName, c.Name); err != nil {
 		return err
 	}
@@ -264,6 +310,9 @@ type VmSnapshotPromoteCmd struct {
 
 func (c *VmSnapshotPromoteCmd) Run() error {
 	vmName := snapshotVmName(c.Vm, c.Domain)
+	if err := refuseKrunSnapshot(vmName); err != nil {
+		return err
+	}
 	entry, err := PromoteSnapshot(vmName, c.Name)
 	if err != nil {
 		return err

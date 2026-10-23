@@ -52,6 +52,12 @@ func TestDestroyVmDomain_QemuStateDir(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("seed state dir: %v", err)
 	}
+	// A bare directory is not a VM: the qemu provider claims only a dir carrying a
+	// qemu artifact (`command` from vm create / `qemu.pid` once started). The
+	// marker also keeps a krun state dir (krun-plan.json) from being claimed here.
+	if err := os.WriteFile(filepath.Join(stateDir, "command"), []byte("qemu-system-x86_64 -name fixture"), 0o644); err != nil {
+		t.Fatalf("seed qemu command: %v", err)
+	}
 	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
 
 	torn, err := destroyVmDomain(name, false)
