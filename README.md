@@ -63,6 +63,7 @@ uClibc userland) runs.
 ## Related
 
 - Owning skill: `/charly-vm:vm` — the VM lifecycle surface, `kind:vm` entities,
-  libvirt/QEMU backends, and VM operations this plugin owns.
+  libvirt/QEMU backends, and the VM operations this plugin owns; projected from
+  this candy's own `skill:` entity, body at `.agents/skills/vm/SKILL.md`.
 - `/charly-internals:plugin` — the plugin/provider model.
 - [`opencharly/charly`](https://github.com/opencharly/charly) — the charly CLI.
