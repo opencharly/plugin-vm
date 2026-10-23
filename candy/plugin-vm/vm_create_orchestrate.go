@@ -411,6 +411,13 @@ func migrateStaleEntityAlias(home, entity string) {
 // domainName is the FULL per-domain identity (domainID[-instance]) — the same token the per-domain
 // state dir (charly-<domainName>) and the libvirt domain use, so the published alias, its identity
 // file, and its known_hosts all point at THIS domain's own state (never a sibling's).
+// vmManagedSSHAlias is the ONE managed ssh-config alias for a VM name. The
+// publisher (publishVmSshAlias) and every recorder (the krun state) call it, so
+// the alias a stop will ssh to can never diverge from the alias that was
+// published. The input is the BARE VM name (publishVmSshAlias is called with the
+// bare name and this function adds the `charly-` namespace exactly once).
+func vmManagedSSHAlias(vmName string) string { return VmSshAlias(vmName) }
+
 func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams) error {
 	vmStateBase, err := vmDir()
 	if err != nil {
@@ -452,7 +459,7 @@ func publishVmSshAlias(home, domainName string, spec *VmSpec, rt VmRuntimeParams
 	}
 
 	stanza := VmSshStanza{
-		Alias:          VmSshAlias(domainName),
+		Alias:          vmManagedSSHAlias(domainName),
 		Hostname:       "127.0.0.1",
 		Port:           rt.SSHPort,
 		User:           resolveVmSshUser(spec),

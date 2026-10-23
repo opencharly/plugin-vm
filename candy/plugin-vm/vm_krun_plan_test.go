@@ -229,7 +229,9 @@ func TestKrunApplyTarget(t *testing.T) {
 // containerd capability actually produces. It proves --runtime krun is carried,
 // the memory/annotation args survive, --cpus is absent, and the image is last.
 func TestKrunStartArgvThroughTheEngineClass(t *testing.T) {
-	plan, err := buildKrunPlan(krunTestInput(krunFixture(nil), 2222))
+	in := krunTestInput(krunFixture(nil), 2222)
+	in.SSHPubKey = "ssh-ed25519 AAAATEST w34"
+	plan, err := buildKrunPlan(in)
 	if err != nil {
 		t.Fatalf("buildKrunPlan: %v", err)
 	}
@@ -245,6 +247,11 @@ func TestKrunStartArgvThroughTheEngineClass(t *testing.T) {
 		"--annotation krun.ram_mib=3840",
 		"--annotation krun.cpus=3",
 		"-p 127.0.0.1:2222:22",
+		// The env handoff must actually reach the engine argv: the start-plan
+		// servant renders Env as `-e k=v`. Mutation: dropping Env from
+		// krunStartPlanRequest silently loses the systemd init and the key.
+		"-e KRUN_INIT_PID1=1",
+		"-e KRUN_SSH_PUBKEY=ssh-ed25519 AAAATEST w34",
 		"ghcr.io/opencharly/test-box:1",
 	} {
 		if !strings.Contains(joined, want) {

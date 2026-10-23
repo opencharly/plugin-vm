@@ -208,7 +208,7 @@ func (krunBackend) Create(req vmCreateReq) error {
 		Engine:   plan.Engine,
 		Image:    plan.Image,
 		SSHPort:  plan.SSHPort,
-		SSHAlias: plan.Name,
+		SSHAlias: req.KrunSSHAlias,
 		Systemd:  req.Spec != nil && krunGuestSystemd(req.Spec),
 		Argv:     argv,
 	}
@@ -315,6 +315,7 @@ func (c *VmCreateCmd) runKrunCreate(entity, domainID, name, vmDomainName, vmStat
 		VmStateDir:    vmStateDir,
 		KrunNVIDIA:    nvidia,
 		KrunSSHPubKey: pubKey,
+		KrunSSHAlias:  vmManagedSSHAlias(name),
 	}
 	if err := (krunBackend{}).Create(req); err != nil {
 		return err

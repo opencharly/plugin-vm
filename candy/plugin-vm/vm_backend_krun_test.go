@@ -257,3 +257,26 @@ func TestKrunScreenshotRefused(t *testing.T) {
 		t.Fatalf("krun screenshot = %v, want a named refusal", err)
 	}
 }
+
+// TestKrunRecordedAliasEqualsPublishedAlias pins the invariant the stop path
+// depends on: the alias recorded in the krun state must be EXACTLY the alias
+// publishVmSshAlias published for the same create. publishVmSshAlias is called
+// with the BARE name and applies VmSshAlias; runKrunCreate records
+// vmManagedSSHAlias of that same bare name, so `ssh <recorded>` reaches the
+// published Host stanza. Mutation: recording the bare name, or recording the FQ
+// name while publishing the bare one, fails.
+func TestKrunRecordedAliasEqualsPublishedAlias(t *testing.T) {
+	const bare = "myvm"
+	published := VmSshAlias(bare)       // what publishVmSshAlias puts in the stanza
+	recorded := vmManagedSSHAlias(bare) // what runKrunCreate puts in KrunSSHAlias
+	if recorded != published {
+		t.Fatalf("recorded alias %q != published alias %q", recorded, published)
+	}
+	if recorded != "charly-myvm" {
+		t.Fatalf("managed alias = %q, want charly-myvm", recorded)
+	}
+	req := vmCreateReq{Name: bare, VmDomainName: "charly-" + bare, KrunSSHAlias: recorded}
+	if req.KrunSSHAlias != VmSshAlias(req.Name) {
+		t.Fatalf("state alias %q diverges from the published alias for %q", req.KrunSSHAlias, req.Name)
+	}
+}

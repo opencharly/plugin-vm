@@ -196,3 +196,19 @@ func TestDestroyVmDomain_LibvirtKeepDiskPreservesStateDir(t *testing.T) {
 		t.Fatalf("libvirt destroy WITHOUT --disk removed the state dir — --keep-disk violated: %v", statErr)
 	}
 }
+
+// TestDestroyVmDomainOnBackendNoHolderIsNoop exercises the seam DIRECTLY for a
+// backend that holds nothing: it must report torn=false with no error (the old
+// default arm's behavior). This keeps the seam covered now that destroyVmDomain
+// holds the provider itself.
+func TestDestroyVmDomainOnBackendNoHolderIsNoop(t *testing.T) {
+	for _, backend := range []string{"", "bogus"} {
+		torn, err := destroyVmDomainOnBackend("charly-no-such-destroy-fixture", backend, "", false)
+		if err != nil {
+			t.Fatalf("destroyVmDomainOnBackend(%q): unexpected error: %v", backend, err)
+		}
+		if torn {
+			t.Fatalf("destroyVmDomainOnBackend(%q): torn=true for a backend that holds nothing", backend)
+		}
+	}
+}

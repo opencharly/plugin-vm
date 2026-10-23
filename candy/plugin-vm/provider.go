@@ -86,6 +86,10 @@ type vmCreateReq struct {
 	// A krun guest has no cloud-init seed, so the key rides the image contract's
 	// env channel instead.
 	KrunSSHPubKey string `json:"krun_ssh_pub_key,omitempty"`
+	// KrunSSHAlias is the EXACT managed alias publishVmSshAlias published for
+	// this create (vmManagedSSHAlias of the bare name), recorded so Stop ssh's
+	// to the alias that exists.
+	KrunSSHAlias string `json:"krun_ssh_alias,omitempty"`
 }
 
 // Invoke runs one `libvirt:` verb method against the in-process libvirt impl and self-evaluates
