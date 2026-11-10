@@ -7,12 +7,19 @@ package params
 type LibvirtVerbInput struct {
 	// method — the libvirt method name (the former core #LibvirtMethod enum; the
 	// verb's PRIMARY input field, so `libvirt: info` desugars to {method: "info"}).
+	//
+	// S3: the words are rows of the `_method` table at the foot of this file, and the
+	// enum this field accepts is derived from that table's word list, so the method
+	// allowlist has ONE home — a new method is ONE row there, and the table, the
+	// derived list and the enum cannot disagree.
 	Method string `yaml:"method,omitempty" json:"method"`
 
 	// action — start|stop|status for a session (session). session start begins
 	// capturing the VM framebuffer (libvirt DomainScreenshot) at fps into an MJPEG
 	// stream (the host-side detached recorder); session stop finalizes it to the
 	// evidence row.
+	//
+	// S3: rows of the `_action` table at the foot of this file.
 	Action string `yaml:"action,omitempty" json:"action,omitempty"`
 
 	// fps — the framebuffer capture rate for session (default 5).
