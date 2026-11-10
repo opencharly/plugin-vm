@@ -33,12 +33,19 @@
 #LibvirtVerbInput: {
 	// method — the libvirt method name (the former core #LibvirtMethod enum; the
 	// verb's PRIMARY input field, so `libvirt: info` desugars to {method: "info"}).
-	method: ("list" | "info" | "screenshot" | "send-key" | "passwd" | "qmp" | "domain-xml" | "console" | "events" | "guest/ping" | "guest/info" | "guest/os-info" | "guest/time" | "guest/hostname" | "guest/users" | "guest/interfaces" | "guest/disks" | "guest/fsinfo" | "guest/vcpus" | "guest/exec" | "guest/fstrim" | "snapshot/list" | "snapshot/create" | "snapshot/info" | "snapshot/revert" | "snapshot/delete" | "session") @go(Method,type=string)
+	//
+	// S3: the words are rows of the `_method` table at the foot of this file, and the
+	// enum this field accepts is derived from that table's word list, so the method
+	// allowlist has ONE home — a new method is ONE row there, and the table, the
+	// derived list and the enum cannot disagree.
+	method: or(_methodWord) @go(Method,type=string)
 	// action — start|stop|status for a session (session). session start begins
 	// capturing the VM framebuffer (libvirt DomainScreenshot) at fps into an MJPEG
 	// stream (the host-side detached recorder); session stop finalizes it to the
 	// evidence row.
-	action?: "start" | "stop" | "status" @go(Action)
+	//
+	// S3: rows of the `_action` table at the foot of this file.
+	action?: or(_actionWord) @go(Action)
 	// fps — the framebuffer capture rate for session (default 5).
 	fps?: int & >=1 @go(Fps,type=int)
 	// text — passwd's new graphics password / qmp's command name.
@@ -77,3 +84,49 @@
 	venue?:       string @go(Venue)
 	phase?:       string @go(Phase)
 }
+
+// --- vocabulary tables (S3) --------------------------------------------------
+// Every closed set of words is a table keyed by word, and its word list is derived
+// from the table and used as `or()` of that list (§10.1 S3, D-PAT-3). The table and
+// the enum it feeds therefore cannot disagree, and a new word is ONE row here.
+// `@vocab` names the owner (§3.1): the set is compiled into THIS plugin, so the owner
+// is the capability word this schema serves, `libvirt`.
+//
+// `_method` mirrors libvirt_methods.go's `libvirtMethods` map — the ALLOWLIST the
+// dispatcher actually reads — except `session`, which provider.go routes BEFORE that
+// map (the detached recorder holds the RPC). catalog_invariant_test.go pins both halves.
+// `_action` is the DETACHED recorder's bracket (session_method.go's `switch in.Action`),
+// not a step's `context:`.
+_method: {
+	list: {}
+	info: {}
+	screenshot: {}
+	"send-key": {}
+	passwd: {}
+	qmp: {}
+	"domain-xml": {}
+	console: {}
+	events: {}
+	"guest/ping": {}
+	"guest/info": {}
+	"guest/os-info": {}
+	"guest/time": {}
+	"guest/hostname": {}
+	"guest/users": {}
+	"guest/interfaces": {}
+	"guest/disks": {}
+	"guest/fsinfo": {}
+	"guest/vcpus": {}
+	"guest/exec": {}
+	"guest/fstrim": {}
+	"snapshot/list": {}
+	"snapshot/create": {}
+	"snapshot/info": {}
+	"snapshot/revert": {}
+	"snapshot/delete": {}
+	session: {}
+} @vocab(libvirt)
+_methodWord: [for w, _ in _method {w}]
+
+_action: {start: {}, stop: {}, status: {}} @vocab(libvirt)
+_actionWord: [for w, _ in _action {w}]
