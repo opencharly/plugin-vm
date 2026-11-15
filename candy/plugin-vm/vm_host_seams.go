@@ -40,6 +40,18 @@ var (
 
 // setCommandContext stashes the reverse-channel executor for the duration of one `charly vm …`
 // dispatch. Called once at the top of command:vm's Invoke(OpRun).
+// vmKindGates returns the KIND GATES the host shipped for this invocation: the same registry
+// snapshot the load path uses, taken over the reverse channel. It is a named seam so a test can
+// prove the SOURCING (the host's snapshot reaches the defaults fill) rather than only that the
+// SDK uses a map it is handed. With no executor there is no host to ask: nil, which makes the
+// fill fall back to the base contract.
+func vmKindGates() map[string]spec.KindGate {
+	if cmdExec == nil {
+		return nil
+	}
+	return loaderkit.LoaderThreadedViaExecutor(cmdCtx, cmdExec).KindGates
+}
+
 func setCommandContext(ctx context.Context, ex *sdk.Executor) {
 	cmdCtx = ctx
 	cmdExec = ex
@@ -132,7 +144,7 @@ func hostConfigResolve(entity, claimantID string) (resolvedConfig, error) {
 					// The gates the host declared ride the same reverse channel as the load's
 					// registry snapshot: the vm body lives in plugin-substrate, so a base-only
 					// resolution would find no #Vm here.
-					if derr := loaderkit.ApplyCueDefaults("vm", vm, loaderkit.LoaderThreadedViaExecutor(cmdCtx, cmdExec).KindGates); derr != nil {
+					if derr := loaderkit.ApplyCueDefaults("vm", vm, vmKindGates()); derr != nil {
 						return resolvedConfig{}, fmt.Errorf("applying vm defaults for %q: %w", entity, derr)
 					}
 					vm.Raw = savedRaw

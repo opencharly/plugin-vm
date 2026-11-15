@@ -34,3 +34,18 @@ func TestApplyCueDefaultsResolvesAVmGate(t *testing.T) {
 	// contract, exercised by the charly tests that own it; asserting it here would test the
 	// decoder, not the gate.)
 }
+
+// TestVmKindGatesSourcesTheHostSnapshot pins the SEAM, not the SDK: the defaults fill's gates
+// come from vmKindGates(), which asks the host over the reverse channel. With no executor there
+// is no host to ask, and the seam must answer nil — so the fill falls back to the base contract
+// instead of silently resolving nothing. It fails if the seam stops sourcing the snapshot.
+func TestVmKindGatesSourcesTheHostSnapshot(t *testing.T) {
+	savedCtx, savedExec := cmdCtx, cmdExec
+	t.Cleanup(func() { cmdCtx, cmdExec = savedCtx, savedExec })
+
+	// No reverse channel: the seam must say so rather than invent gates.
+	cmdExec = nil
+	if g := vmKindGates(); g != nil {
+		t.Fatalf("with no executor the seam returned %v, want nil (no host to ask)", g)
+	}
+}
