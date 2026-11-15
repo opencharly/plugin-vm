@@ -129,7 +129,10 @@ func hostConfigResolve(entity, claimantID string) (resolvedConfig, error) {
 				if vm != nil {
 					savedRaw := vm.Raw
 					vm.Raw = nil
-					if derr := loaderkit.ApplyCueDefaults("vm", vm); derr != nil {
+					// The gates the host declared ride the same reverse channel as the load's
+					// registry snapshot: the vm body lives in plugin-substrate, so a base-only
+					// resolution would find no #Vm here.
+					if derr := loaderkit.ApplyCueDefaults("vm", vm, loaderkit.LoaderThreadedViaExecutor(cmdCtx, cmdExec).KindGates); derr != nil {
 						return resolvedConfig{}, fmt.Errorf("applying vm defaults for %q: %w", entity, derr)
 					}
 					vm.Raw = savedRaw
