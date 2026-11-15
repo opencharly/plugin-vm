@@ -38,20 +38,38 @@ var (
 	cmdExec *sdk.Executor
 )
 
-// setCommandContext stashes the reverse-channel executor for the duration of one `charly vm …`
-// dispatch. Called once at the top of command:vm's Invoke(OpRun).
+// kindGatesFromHost asks the host for the registry snapshot that carries the kind gates. It is a
+// package var, not a direct call, because the reverse channel needs a LIVE host: the seam's
+// POSITIVE branch (a host that answers) must be provable in this repo's own suite, so a test
+// supplies the answer here while every production read still goes through
+// loaderkit.LoaderThreadedViaExecutor.
+var kindGatesFromHost = func(ctx context.Context, ex *sdk.Executor) map[string]spec.KindGate {
+	return loaderkit.LoaderThreadedViaExecutor(ctx, ex).KindGates
+}
+
 // vmKindGates returns the KIND GATES the host shipped for this invocation: the same registry
-// snapshot the load path uses, taken over the reverse channel. It is a named seam so a test can
-// prove the SOURCING (the host's snapshot reaches the defaults fill) rather than only that the
-// SDK uses a map it is handed. With no executor there is no host to ask: nil, which makes the
-// fill fall back to the base contract.
+// snapshot the load path uses, taken over the reverse channel. With no executor there is no host
+// to ask: nil, which makes the fill fall back to the base contract.
 func vmKindGates() map[string]spec.KindGate {
 	if cmdExec == nil {
 		return nil
 	}
-	return loaderkit.LoaderThreadedViaExecutor(cmdCtx, cmdExec).KindGates
+	return kindGatesFromHost(cmdCtx, cmdExec)
 }
 
+// applyVmDefaults fills a resolved vm body's schema-declared defaults with the gates the HOST
+// shipped. The base contract's declaration for this kind is the RESOLVED ENVELOPE (#ResolvedVm —
+// plain post-default scalars, no enum/default machinery), while the host's gate carries the
+// AUTHORED #Vm the serving plugin ships: a base-only fill therefore applies the envelope, not the
+// body's own schema. It takes the body as `any` — the SDK fill's own shape — and is NAMED so the
+// suite drives THIS call (the sourced gates reaching the fill) rather than a gate map the test
+// built for itself.
+func applyVmDefaults(body any) error {
+	return loaderkit.ApplyCueDefaults("vm", body, vmKindGates())
+}
+
+// setCommandContext stashes the reverse-channel executor for the duration of one `charly vm …`
+// dispatch. Called once at the top of command:vm's Invoke(OpRun).
 func setCommandContext(ctx context.Context, ex *sdk.Executor) {
 	cmdCtx = ctx
 	cmdExec = ex
@@ -142,9 +160,9 @@ func hostConfigResolve(entity, claimantID string) (resolvedConfig, error) {
 					savedRaw := vm.Raw
 					vm.Raw = nil
 					// The gates the host declared ride the same reverse channel as the load's
-					// registry snapshot: the vm body lives in plugin-substrate, so a base-only
-					// resolution would find no #Vm here.
-					if derr := loaderkit.ApplyCueDefaults("vm", vm, vmKindGates()); derr != nil {
+					// registry snapshot: a base-only resolution applies the resolved ENVELOPE,
+					// not the authored #Vm the serving plugin ships.
+					if derr := applyVmDefaults(vm); derr != nil {
 						return resolvedConfig{}, fmt.Errorf("applying vm defaults for %q: %w", entity, derr)
 					}
 					vm.Raw = savedRaw
